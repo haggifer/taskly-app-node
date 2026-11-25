@@ -1,4 +1,4 @@
-### 🧪 Unit test agent: <one-line outcome, e.g. "added 9 tests for 3 changed files" or "no tests needed">
+### Agent report: <one-line outcome, e.g. "added 9 tests for 3 changed files" or "no tests needed">
 
 **Decisions**
 
