@@ -132,6 +132,37 @@ describe('getCommandDecision', () => {
       false,
     )
   })
+
+  it('allows staging test files by path', () => {
+    assert.equal(
+      getCommandDecision(
+        'git add backend/tests/router.test.ts frontend/src/lib/http.test.ts',
+      ).isAllowed,
+      true,
+    )
+    assert.equal(
+      getCommandDecision('git commit -m "test: add tests [unit-test-agent]"')
+        .isAllowed,
+      true,
+    )
+  })
+
+  it('refuses bulk staging and committing everything', () => {
+    for (const command of [
+      'git add -A',
+      'git add --all',
+      'git add .',
+      'git add -u',
+      'git add -Av',
+      'git add backend/tests .',
+      'git add :/',
+      'git commit -a -m "x"',
+      'git commit -am "x"',
+      'git commit --all -m "x"',
+    ]) {
+      assert.equal(getCommandDecision(command).isAllowed, false, command)
+    }
+  })
 })
 
 describe('resolveOutPath', () => {

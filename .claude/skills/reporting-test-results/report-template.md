@@ -32,4 +32,4 @@
 
 </details>
 
-<sub>Written by the unit-test agent. The deterministic gate's verified results follow in a separate comment.</sub>
+<sub>Written by the unit-test agent. The deterministic gate's verified results follow below.</sub>

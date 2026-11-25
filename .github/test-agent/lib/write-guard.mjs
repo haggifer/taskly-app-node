@@ -14,6 +14,10 @@ const RUN_DIR_FILES = ['report.md']
 const RUN_DIR_FOLDERS = ['verify']
 const SHELL_OPERATORS = /[;&|<>`$\r\n]/
 const OUTPUT_FLAG = /(^|\s)--output(=|\s|$)/
+const BULK_GIT_ADD =
+  /^\s*git\s+add\b.*(\s(-A|--all|-u|--update|\.|:\/|\*)(\s|$)|\s-[a-zA-Z]*[Au])/
+const BULK_GIT_COMMIT =
+  /^\s*git\s+commit\b.*\s(-[a-zA-Z]*a[a-zA-Z]*|--all)(\s|$)/
 
 const isInside = (parent, child) => {
   const path = relative(parent, child)
@@ -88,6 +92,14 @@ export const getCommandDecision = (command) => {
     return {
       isAllowed: false,
       reason: '--output is not allowed: write files with the Write tool.',
+    }
+  }
+
+  if (BULK_GIT_ADD.test(command) || BULK_GIT_COMMIT.test(command)) {
+    return {
+      isAllowed: false,
+      reason:
+        'Stage test files by path (git add <paths>), then git commit -m. Bulk staging is not allowed.',
     }
   }
 

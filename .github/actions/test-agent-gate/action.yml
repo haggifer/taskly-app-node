@@ -14,14 +14,20 @@ inputs:
   workspace:
     description: Path of a fresh checkout of the commit the agent started from.
     required: true
+  toolkit:
+    description: Path (from the job's workspace) of the trusted toolkit to judge with. Defaults to the workspace's own.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
     - name: Copy the gate toolkit before any patch is applied
       shell: bash
-      working-directory: ${{ inputs.workspace }}
-      run: cp -r .github/test-agent "$RUNNER_TEMP/test-agent-gate"
+      env:
+        TOOLKIT: ${{ inputs.toolkit }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: cp -r "${TOOLKIT:-$WORKSPACE/.github/test-agent}" "$RUNNER_TEMP/test-agent-gate"
 
     - name: Install dependencies without lifecycle scripts
       shell: bash

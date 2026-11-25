@@ -70,6 +70,19 @@ jobs:
           (cd backend && npx --no-install prisma generate)
           npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
 
+      # A pull request must not be able to rewrite the instructions, skills, settings or guard of the agent that
+      # reviews it, so those come from the base branch. The overlay stays unstaged and never enters the agent's commit.
+      - name: Use the agent's files from the base branch
+        if: inputs.mode == 'pr'
+        env:
+          BASE_SHA: ${{ inputs.base-sha }}
+        run: |
+          if ! git diff --quiet "$BASE_SHA" HEAD -- .claude .github/test-agent; then
+            echo "::notice::This pull request changes the agent's own files; the run uses the base branch's versions."
+          fi
+          rm -rf .claude .github/test-agent
+          git archive "$BASE_SHA" .claude .github/test-agent | tar -x
+
       - name: Prepare the agent's inputs
         id: prepare
         env:
@@ -252,6 +265,16 @@ jobs:
           path: test-agent-workspace
           fetch-depth: 0
           persist-credentials: false
+      # The gate's own code comes from the base branch, so the pull request under test can't change how it's judged.
+      - name: Check out the trusted gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-sha || inputs.checkout-ref }}
+          path: test-agent-trusted
+          sparse-checkout: |
+            .github/actions
+            .github/test-agent
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -260,8 +283,9 @@ jobs:
         with:
           name: test-agent-output
           path: ${{ runner.temp }}/agent-output
-      - uses: ./test-agent-workspace/.github/actions/test-agent-gate
+      - uses: ./test-agent-trusted/.github/actions/test-agent-gate
         with:
           base-sha: ${{ inputs.base-sha }}
           patch-dir: ${{ runner.temp }}/agent-output
           workspace: test-agent-workspace
+          toolkit: test-agent-trusted/.github/test-agent
