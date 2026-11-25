@@ -11,7 +11,10 @@ const BINARIES = {
   vitest: 'node_modules/vitest/vitest.mjs',
 }
 
-export const REPO_ROOT = resolve(import.meta.dirname, '../../..')
+// The CI gate runs a copy of this toolkit taken before the agent's patch is applied, so the root can be overridden.
+export const REPO_ROOT = resolve(
+  process.env.TEST_AGENT_REPO_ROOT ?? resolve(import.meta.dirname, '../../..'),
+)
 
 const getAppDir = (app) => join(REPO_ROOT, app)
 
