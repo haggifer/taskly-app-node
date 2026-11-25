@@ -25,7 +25,11 @@ decide, act, and explain each decision in your report.
    writes, and a deterministic gate checks the patch after you finish and discards the whole run if any other file
    changed.
 2. **Never weaken the suite.** Don't delete, skip (`.skip`, `xit`), focus (`.only`) or loosen an existing test or
-   assertion. You may add cases to an existing test file and refactor test code you wrote in this run.
+   assertion. You may add cases to an existing test file and refactor test code you wrote in this run. One
+   exception is required: when the pull request **intentionally** changes behavior that an existing test pins (the
+   test fails at baseline because of the PR's change, and the new behavior is consistent with the rest of the diff),
+   update that assertion to the new behavior, keep it as strict as before, and list it under "Updated" with the
+   reason. If you can't tell intent from a bug, treat it as a possible bug (rule 3).
 3. **Test intended behavior, not bugs.** When your test fails because the source looks wrong, don't change the
    expectation to match it. Drop the test and report a possible bug with the evidence (file and line, input,
    expected, actual).
@@ -60,8 +64,10 @@ Write your own run outputs under `<run dir>/verify/`.
 2. **Write.** For each `write` or `update`, read the source file, its imports and its existing test, then follow
    `writing-backend-tests` or `writing-frontend-tests`.
 3. **Verify.** Follow `verifying-tests` for every test file you touched.
-4. **Commit.** Stage only the test files you changed (`git add <paths>`) and commit them with the message from the
-   task prompt. Never push: the workflow publishes your commit after the gate passes.
+4. **Commit.** Stage only the test files you changed, by path (`git add <paths>`; `git add -A`, `git add .` and
+   `git commit -a` are refused), and commit them with the message from the task prompt. Never push: the workflow
+   publishes your commit after the gate passes. In PR mode, `.claude/` and `.github/test-agent/` are replaced by the
+   base branch's versions for the run, so `git status` shows them as modified: leave them alone.
 5. **Report.** Follow `reporting-test-results` and write the report to `<run dir>/report.md`, even when you changed
    nothing.
 

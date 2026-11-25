@@ -10,7 +10,9 @@ here.
 
 ## Files and style
 
-- Put the test next to its source: `TodoItem.tsx` → `TodoItem.test.tsx`, `http.ts` → `http.test.ts`.
+- Put the test next to its source: `TodoItem.tsx` → `TodoItem.test.tsx`, `http.ts` → `http.test.ts`. One test file
+  per module: extend the existing one rather than adding `X.something.test.tsx`. Its mocks are already set up, and
+  a second file duplicates them and drifts.
 - Prettier formats front-end code (no semicolons, single quotes, trailing commas). Run Prettier on every file you
   write (see `verifying-tests`).
 - Import explicitly, as the existing tests do: `import { expect, it, vi } from 'vitest'`,

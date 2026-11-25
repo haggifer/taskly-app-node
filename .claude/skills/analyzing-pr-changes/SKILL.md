@@ -27,6 +27,12 @@ node .github/test-agent/collect-changes.mjs --base <base sha> --head HEAD --out 
 | `test` | No decision of its own. Read it: the author's tests count as existing coverage in step 3. |
 | `source`, added/modified/renamed | Go to step 3 |
 
+**Check the baseline for red tests first.** `baseline/<app>/result.json` lists failures. A test that fails before
+you change anything was broken by the PR. If the PR intentionally changed the behavior it pins (for example, a
+response gained a field or a function returns something new, and the rest of the diff agrees), decide `update` for
+that test file: the agent's hard rule 2 requires the assertion to follow the new behavior. If the change looks
+unintended, report it as a possible bug instead. Either way, the gate only publishes when the whole suite is green.
+
 ## 3. Decide for each changed source file
 
 1. Read the change: `git diff <base sha>...HEAD -- <path>`, then the whole file.

@@ -14,14 +14,37 @@ inputs:
   workspace:
     description: Path of a fresh checkout of the commit the agent started from.
     required: true
+  toolkit:
+    description: Path (from the job's workspace) of the trusted toolkit to judge with. Defaults to the workspace's own.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
-    - name: Copy the gate toolkit before any patch is applied
+    # Everything that decides the verdict is fixed here, before any pull request code runs: a root-owned, read-only
+    # toolkit, the starting commit and the patch hash (as step outputs, which later code can't rewrite).
+    - name: Fix the trusted inputs
+      id: trusted
       shell: bash
       working-directory: ${{ inputs.workspace }}
-      run: cp -r .github/test-agent "$RUNNER_TEMP/test-agent-gate"
+      env:
+        TOOLKIT: ${{ inputs.toolkit }}
+        WORKSPACE: ${{ github.workspace }}/${{ inputs.workspace }}
+        PATCH_DIR: ${{ inputs.patch-dir }}
+      run: |
+        SOURCE="$WORKSPACE/.github/test-agent"
+        if [ -n "$TOOLKIT" ]; then SOURCE="$GITHUB_WORKSPACE/$TOOLKIT"; fi
+        sudo cp -r "$SOURCE" /opt/test-agent-gate
+        sudo chown -R root:root /opt/test-agent-gate && sudo chmod -R a-w,a+rX /opt/test-agent-gate
+        echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        if [ -s "$PATCH_DIR/agent.patch" ]; then
+          echo "patch-sha256=$(sha256sum "$PATCH_DIR/agent.patch" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        else
+          echo "patch-sha256=none" >> "$GITHUB_OUTPUT"
+        fi
+        sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 > /dev/null
 
     - name: Install dependencies without lifecycle scripts
       shell: bash
@@ -38,54 +61,60 @@ runs:
         BASE_SHA: ${{ inputs.base-sha }}
         TEST_AGENT_REPO_ROOT: ${{ github.workspace }}/${{ inputs.workspace }}
       run: |
-        GATE="$RUNNER_TEMP/test-agent-gate"
+        GATE=/opt/test-agent-gate
         OUT="$RUNNER_TEMP/test-agent-run"
         mkdir -p "$OUT"
+        CHANGES=()
         if [ -n "$BASE_SHA" ]; then
           node "$GATE/collect-changes.mjs" --base "$BASE_SHA" --head HEAD --out "$OUT/changes.json"
           CHANGES=(--changes "$OUT/changes.json")
-        else
-          CHANGES=()
         fi
         for app in backend frontend; do
-          node "$GATE/run-tests.mjs" --app "$app" "${CHANGES[@]}" --out "$OUT/baseline/$app" || true
+          bash "$GATE/sandboxed.sh" "$TEST_AGENT_REPO_ROOT" "$OUT" -- \
+            node "$GATE/run-tests.mjs" --app "$app" "${CHANGES[@]}" --out "$OUT/baseline/$app" || true
         done
-        git rev-parse HEAD > "$OUT/start-sha"
 
     - name: Apply the agent's patch
       shell: bash
       working-directory: ${{ inputs.workspace }}
       env:
         PATCH_DIR: ${{ inputs.patch-dir }}
+        PATCH_SHA256: ${{ steps.trusted.outputs.patch-sha256 }}
       # Exactly the file the publish job applies; its hash ties the published bytes to the verified ones.
       run: |
         PATCH="$PATCH_DIR/agent.patch"
-        mkdir -p "$RUNNER_TEMP/test-agent-run/verification"
-        if [ ! -s "$PATCH" ]; then
-          echo "The agent produced no patch."
-          echo "none" > "$RUNNER_TEMP/test-agent-run/verification/patch.sha256"
-          exit 0
+        if [ "$PATCH_SHA256" = "none" ]; then echo "The agent produced no patch."; exit 0; fi
+        if [ "$(sha256sum "$PATCH" | cut -d ' ' -f 1)" != "$PATCH_SHA256" ]; then
+          echo "::error::The patch changed while the gate ran."; exit 1
         fi
-        sha256sum "$PATCH" | cut -d ' ' -f 1 > "$RUNNER_TEMP/test-agent-run/verification/patch.sha256"
         git -c user.name="unit-test-agent gate" -c user.email="gate@localhost" am --3way "$PATCH"
 
     - name: Verify the patch
       shell: bash
       working-directory: ${{ inputs.workspace }}
       env:
+        START_SHA: ${{ steps.trusted.outputs.start-sha }}
         TEST_AGENT_REPO_ROOT: ${{ github.workspace }}/${{ inputs.workspace }}
       run: |
         OUT="$RUNNER_TEMP/test-agent-run"
         CHANGES=()
         if [ -f "$OUT/changes.json" ]; then CHANGES=(--changes "$OUT/changes.json"); fi
-        node "$RUNNER_TEMP/test-agent-gate/verify-patch.mjs" \
-          --since "$(cat "$OUT/start-sha")" "${CHANGES[@]}" \
+        bash /opt/test-agent-gate/sandboxed.sh "$TEST_AGENT_REPO_ROOT" "$OUT" -- \
+          node /opt/test-agent-gate/verify-patch.mjs --since "$START_SHA" "${CHANGES[@]}" \
           --baseline "$OUT/baseline" --out "$OUT/verification"
+
+    - name: Record the verified patch hash
+      if: always()
+      shell: bash
+      env:
+        PATCH_SHA256: ${{ steps.trusted.outputs.patch-sha256 }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/test-agent-run/verification"
+        echo "$PATCH_SHA256" > "$RUNNER_TEMP/test-agent-run/verification/patch.sha256"
 
     - name: Add the gate summary to the job summary
       if: always()
       shell: bash
-      working-directory: ${{ inputs.workspace }}
       run: |
         SUMMARY="$RUNNER_TEMP/test-agent-run/verification/summary.md"
         if [ -f "$SUMMARY" ]; then cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"; fi

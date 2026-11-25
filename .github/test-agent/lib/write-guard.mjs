@@ -14,6 +14,29 @@ const RUN_DIR_FILES = ['report.md']
 const RUN_DIR_FOLDERS = ['verify']
 const SHELL_OPERATORS = /[;&|<>`$\r\n]/
 const OUTPUT_FLAG = /(^|\s)--output(=|\s|$)/
+const PATHSPEC_MAGIC = /[*?[\]:]/
+const STAGING_RULE =
+  'Stage test files by path (git add <test files>) and commit with git commit -m "<message>" only.'
+
+// Splits a command the way the shell would for the simple, operator-free commands allowed here.
+const splitArgs = (command) =>
+  [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+    ([, double, single, bare]) => double ?? single ?? bare,
+  )
+
+const isTestPathArg = (arg) =>
+  !arg.startsWith('-') && !PATHSPEC_MAGIC.test(arg) && isAllowedTestPath(arg)
+
+const isAllowedGitAdd = (args) => {
+  const paths = args[0] === '--' ? args.slice(1) : args
+
+  return paths.length > 0 && paths.every(isTestPathArg)
+}
+
+const isAllowedGitCommit = (args) =>
+  args.length >= 2 &&
+  args.length % 2 === 0 &&
+  args.every((arg, index) => (index % 2 === 0 ? arg === '-m' : arg.length > 0))
 
 const isInside = (parent, child) => {
   const path = relative(parent, child)
@@ -89,6 +112,17 @@ export const getCommandDecision = (command) => {
       isAllowed: false,
       reason: '--output is not allowed: write files with the Write tool.',
     }
+  }
+
+  const [program, subcommand, ...args] = splitArgs(command)
+  const isGitAdd = program === 'git' && subcommand === 'add'
+  const isGitCommit = program === 'git' && subcommand === 'commit'
+
+  if (
+    (isGitAdd && !isAllowedGitAdd(args)) ||
+    (isGitCommit && !isAllowedGitCommit(args))
+  ) {
+    return { isAllowed: false, reason: STAGING_RULE }
   }
 
   return { isAllowed: true, reason: null }

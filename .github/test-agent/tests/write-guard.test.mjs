@@ -132,6 +132,69 @@ describe('getCommandDecision', () => {
       false,
     )
   })
+
+  it('allows staging test files by path', () => {
+    assert.equal(
+      getCommandDecision(
+        'git add backend/tests/router.test.ts frontend/src/lib/http.test.ts',
+      ).isAllowed,
+      true,
+    )
+    assert.equal(
+      getCommandDecision('git commit -m "test: add tests [unit-test-agent]"')
+        .isAllowed,
+      true,
+    )
+  })
+
+  it('refuses bulk staging and committing everything', () => {
+    for (const command of [
+      'git add -A',
+      'git add --all',
+      'git add .',
+      'git add -u',
+      'git add -Av',
+      'git add backend/tests .',
+      'git add :/',
+      'git commit -a -m "x"',
+      'git commit -am "x"',
+      'git commit --all -m "x"',
+    ]) {
+      assert.equal(getCommandDecision(command).isAllowed, false, command)
+    }
+  })
+
+  it('refuses staging anything but test files, and commit flags other than -m', () => {
+    for (const command of [
+      'git add',
+      'git add backend/src/factory.ts',
+      'git add .claude/agents/unit-test-agent.md',
+      'git add backend/tests/*.test.ts',
+      'git add -f backend/tests/a.test.ts',
+      'git add --pathspec-from-file=list.txt',
+      'git add :(glob)backend/**',
+      'git commit',
+      'git commit -m',
+      'git commit -m "x" -i backend/src/factory.ts',
+      'git commit --include -m "x"',
+      'git commit -m "x" backend/src/factory.ts',
+      'git commit --amend -m "x"',
+      'git commit --no-verify -m "x"',
+    ]) {
+      assert.equal(getCommandDecision(command).isAllowed, false, command)
+    }
+  })
+
+  it('accepts several messages and the -- separator', () => {
+    assert.equal(
+      getCommandDecision('git commit -m "title" -m "body"').isAllowed,
+      true,
+    )
+    assert.equal(
+      getCommandDecision('git add -- backend/tests/router.test.ts').isAllowed,
+      true,
+    )
+  })
 })
 
 describe('resolveOutPath', () => {
