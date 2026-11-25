@@ -7,22 +7,31 @@ import { TodoEditor } from './components/TodoEditor'
 import { TodoFilters } from './components/TodoFilters'
 import { TodoList } from './components/TodoList'
 import { TodosHeader } from './components/TodosHeader'
+import { useClearCompletedMutation } from './hooks/useClearCompletedMutation'
 import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
 import { useUpdateTodoMutation } from './hooks/useUpdateTodoMutation'
 import type { Todo } from './types'
 
+const getClearedNotice = (deleted: number) =>
+  deleted === 1
+    ? '1 completed task deleted.'
+    : `${deleted} completed tasks deleted.`
+
 export function TodosPage() {
   const todosQuery = useTodosQuery()
   const todos = todosQuery.data ?? []
   const filters = useTodoFilters(todos)
   const toggleTodo = useUpdateTodoMutation()
+  const clearCompletedTodos = useClearCompletedMutation()
   const busy = useTodosBusy()
   const { message, notify } = useNotice()
   const [editor, setEditor] = useState<Todo | 'new' | null>(null)
   const [deleting, setDeleting] = useState<Todo | null>(null)
-  const error = toggleTodo.error ?? todosQuery.error
+  const completedCount = todos.filter((todo) => todo.completed).length
+  const error =
+    toggleTodo.error ?? clearCompletedTodos.error ?? todosQuery.error
 
   async function toggle(todo: Todo) {
     if (busy) return
@@ -40,8 +49,18 @@ export function TodosPage() {
       // Display the mutation error in the page alert.
     }
   }
+  async function clearCompleted() {
+    if (busy) return
+    try {
+      const { deleted } = await clearCompletedTodos.mutateAsync()
+      notify(getClearedNotice(deleted))
+    } catch {
+      // Display the mutation error in the page alert.
+    }
+  }
   async function retry() {
     toggleTodo.reset()
+    clearCompletedTodos.reset()
     await todosQuery.refetch()
   }
 
@@ -51,6 +70,8 @@ export function TodosPage() {
         <TodosHeader
           disabled={todosQuery.isPending || busy}
           onCreate={() => setEditor('new')}
+          completedCount={completedCount}
+          onClearCompleted={() => void clearCompleted()}
         />
         <TodoFilters
           filter={filters.filter}
