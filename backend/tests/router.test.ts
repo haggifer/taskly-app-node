@@ -93,12 +93,12 @@ it('deletes a task and returns 204 with no body', async () => {
   expect(response.text).toBe('');
   expect(repository.delete).toHaveBeenCalledWith(1);
 });
-it.each([2, 0])('clears completed tasks and returns the deleted count (%i)', async (deleted) => {
+it.each([[[2, 4]], [[]]])('clears completed tasks and returns the deleted count and IDs (%j)', async (ids) => {
   const { app, repository } = setup();
-  repository.deleteCompleted.mockResolvedValue(deleted);
+  repository.deleteCompleted.mockResolvedValue(ids);
   const response = await request(app).delete('/api/todos/completed');
   expect(response.status).toBe(200);
-  expect(response.body).toEqual({ deleted });
+  expect(response.body).toEqual({ deleted: ids.length, ids });
   expect(repository.deleteCompleted).toHaveBeenCalledOnce();
   expect(repository.delete).not.toHaveBeenCalled();
 });

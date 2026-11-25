@@ -76,11 +76,21 @@ it('deletes tasks and handles missing tasks', async () => {
   expect(await repository.delete(1)).toBe(false);
 });
 
-it.each([3, 0])('deletes only completed tasks and returns the count (%i)', async (count) => {
+it('deletes only completed tasks and returns their IDs', async () => {
   const { database, repository } = setup();
-  const remove = vi.spyOn(database.todo, 'deleteMany').mockResolvedValue({ count });
-  expect(await repository.deleteCompleted()).toBe(count);
-  expect(remove).toHaveBeenCalledWith({ where: { completed: true } });
+  const findMany = vi.spyOn(database.todo, 'findMany').mockResolvedValue([{ ...record, id: 3 }, { ...record, id: 5 }]);
+  const remove = vi.spyOn(database.todo, 'deleteMany').mockResolvedValue({ count: 2 });
+  expect(await repository.deleteCompleted()).toEqual([3, 5]);
+  expect(findMany).toHaveBeenCalledWith({ where: { completed: true }, select: { id: true } });
+  expect(remove).toHaveBeenCalledWith({ where: { id: { in: [3, 5] }, completed: true } });
+});
+
+it('returns no IDs and skips the delete when no task is completed', async () => {
+  const { database, repository } = setup();
+  vi.spyOn(database.todo, 'findMany').mockResolvedValue([]);
+  const remove = vi.spyOn(database.todo, 'deleteMany');
+  expect(await repository.deleteCompleted()).toEqual([]);
+  expect(remove).not.toHaveBeenCalled();
 });
 
 it('propagates database errors', async () => {

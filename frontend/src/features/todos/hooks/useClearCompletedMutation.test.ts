@@ -12,18 +12,31 @@ beforeEach(() => vi.clearAllMocks())
 const completed = { ...todoFixture, id: 3, title: 'Done', completed: true }
 
 it('clears completed tasks and keeps only active ones in the cached list', async () => {
-  vi.mocked(todosApi.clearCompleted).mockResolvedValue({ deleted: 1 })
+  vi.mocked(todosApi.clearCompleted).mockResolvedValue({ deleted: 1, ids: [3] })
   const { client, wrapper } = createQueryClientWrapper()
   client.setQueryData(todoKeys.list, [completed, todoFixture])
   const { result } = renderHook(() => useClearCompletedMutation(), { wrapper })
   const cleared = await act(() => result.current.mutateAsync())
-  expect(cleared).toEqual({ deleted: 1 })
+  expect(cleared).toEqual({ deleted: 1, ids: [3] })
   expect(todosApi.clearCompleted).toHaveBeenCalledTimes(1)
   expect(client.getQueryData(todoKeys.list)).toEqual([todoFixture])
 })
 
+it('removes only the tasks the server deleted from the cached list', async () => {
+  vi.mocked(todosApi.clearCompleted).mockResolvedValue({ deleted: 1, ids: [3] })
+  const { client, wrapper } = createQueryClientWrapper()
+  const completedLater = { ...completed, id: 4, title: 'Done later' }
+  client.setQueryData(todoKeys.list, [completed, completedLater, todoFixture])
+  const { result } = renderHook(() => useClearCompletedMutation(), { wrapper })
+  await act(() => result.current.mutateAsync())
+  expect(client.getQueryData(todoKeys.list)).toEqual([
+    completedLater,
+    todoFixture,
+  ])
+})
+
 it('leaves an empty cache untouched', async () => {
-  vi.mocked(todosApi.clearCompleted).mockResolvedValue({ deleted: 0 })
+  vi.mocked(todosApi.clearCompleted).mockResolvedValue({ deleted: 0, ids: [] })
   const { client, wrapper } = createQueryClientWrapper()
   const { result } = renderHook(() => useClearCompletedMutation(), { wrapper })
   await act(() => result.current.mutateAsync())
