@@ -25,9 +25,10 @@ node .github/test-agent/run-tests.mjs --app backend \
   --repeat 2 --typecheck --out <run dir>/verify/backend-<attempt>
 ```
 
-Exit code 0 means every test passed in both runs, nothing was flaky, and the checks passed. The output lists each
-failure with its message, and the coverage of each target. Coverage tells you which branches are still untested;
-it's a hint, not a goal.
+Use absolute `--out` paths. Exit code 0 means every test passed in both runs, nothing was flaky, and the checks
+passed. Read the exit code itself (don't pipe the command through `tail`). The output lists each failure with its
+message, and the coverage of each target. Coverage tells you which branches are still untested; it's a hint, not a
+goal.
 
 ## 3. Triage each failure
 
@@ -43,11 +44,15 @@ created) and report them as unverified. Never leave a failing or skipped test be
 
 ## 4. Check you broke nothing
 
-Run the whole suite of each app you touched, without `--tests`, once at the end:
+Run the whole suite of each app you touched once at the end: no `--tests`, and `--targets` set to the source files
+you covered, so you get their final coverage for the report:
 
 ```bash
-node .github/test-agent/run-tests.mjs --app frontend --out <run dir>/verify/frontend-full
+node .github/test-agent/run-tests.mjs --app frontend --targets src/lib/http.ts,src/hooks/useNotice.ts \
+  --out <run dir>/verify/frontend-full
 ```
+
+For the report, take pass and fail counts from the targeted runs in step 2, and coverage from this full run.
 
 After you finish, a deterministic gate (`.github/test-agent/verify-patch.mjs`) re-runs everything, checks that only
 test files changed, and blocks publishing on any failure. It does not replace this skill: a run that fails the gate

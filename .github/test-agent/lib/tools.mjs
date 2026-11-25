@@ -48,10 +48,12 @@ export const runVitest = ({
   coverageInclude = [],
   isShuffled = false,
 }) => {
-  const resultsPath = join(outDir, 'results.json')
-  const coverageDir = join(outDir, 'coverage')
+  // Vitest runs inside the app folder, so a relative path would point somewhere else for it.
+  const absoluteOutDir = resolve(outDir)
+  const resultsPath = join(absoluteOutDir, 'results.json')
+  const coverageDir = join(absoluteOutDir, 'coverage')
 
-  mkdirSync(outDir, { recursive: true })
+  mkdirSync(absoluteOutDir, { recursive: true })
 
   const { exitCode, output } = runNodeBinary(app, 'vitest', [
     'run',

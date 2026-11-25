@@ -12,6 +12,7 @@ the details in `<details>` blocks.
 
 - Fill in `report-template.md` (in this folder). Keep it under 60 lines, not counting the `<details>` blocks.
 - Every number comes from a command you ran this session (the `run-tests.mjs` output). Never estimate or round up.
+  Count tests as Vitest reports them: each `it.each` row is one test.
 - Put file paths and test names in backticks. Never paste whole files, environment variables or secrets.
 - **Possible bugs** get their own section, with file and line, input, expected and actual. Leave the section out
   when there are none.

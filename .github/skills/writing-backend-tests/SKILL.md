@@ -12,6 +12,8 @@ Read `backend/tests/` before writing: the existing tests are the style guide. Ma
 - One file per module: `backend/tests/<module>.test.ts` (flat folder). Extend the existing file for a module
   rather than creating a second one.
 - Import sources with the `.ts` extension, as the existing tests do: `import { createApp } from '../src/factory.ts'`.
+  Mock a module by the same `.ts` path (`vi.mock('../src/core/database.ts')`). Vitest resolves it to the module the
+  source imports as `./database.js`.
 - Semicolons and single quotes; the back end has no formatter, so copy the neighbouring files.
 - Import test functions explicitly: `import { afterEach, describe, expect, it, vi } from 'vitest'`.
 - Reuse `tests/fixture.ts`: `record` is a Prisma row, `todo` is the matching API object. Add new fixtures as new
@@ -47,12 +49,21 @@ and check the JSON 404, invalid JSON (422), oversized body (413), unexpected err
 spied and silenced) and `/openapi.json`.
 
 **Config (`core/config.ts`):** set variables with `vi.stubEnv`, clear them with `vi.unstubAllEnvs()` in `afterEach`,
-and assert the built URL, including the encoding of special characters and the error for each missing variable.
+and assert the built URL, including the encoding of special characters and the error for each missing variable. The
+module loads the repository's `.env` when imported, and CI may set variables too, so start every test from a known
+state: stub `DATABASE_URL` and each `POSTGRES_*` / `DB_PORT` variable explicitly, using `''` for "missing".
 
 **Database and lifespan (`core/database.ts`, `core/lifespan.ts`):** mock the collaborators with `vi.mock` (the Prisma
 client, `createApp`) and assert the calls: `initialize` runs the DDL through `$executeRaw`, and `start` connects,
-initializes, listens and disconnects on failure. If a function only wires modules together, record it as
-`skip-not-testable` instead of mocking everything.
+initializes, listens and disconnects on failure. Two traps in `start`:
+
+- It reads `listener` inside the `listen` callback, so a fake `app.listen` must call its callback asynchronously
+  (`queueMicrotask(callback)`) and return the fake server first, or the test hits a temporal dead zone error.
+- It registers `SIGTERM` and `SIGINT` handlers. Spy on `process.once` with an implementation that only records the
+  handler, so nothing leaks into the test process, then call the recorded handler to test shutdown.
+
+If a function only wires modules together (`main.ts`), record it as `skip-not-testable` instead of mocking
+everything.
 
 ## Avoid
 
