@@ -98,20 +98,17 @@ jobs:
       - name: Install Claude Code
         run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
 
-      # Claude Code's sandbox isolates the agent's commands (filesystem writes, no outbound network).
-      # Ubuntu 24.04 blocks the unprivileged user namespaces bubblewrap needs; a profile unblocks bwrap only.
+      # Claude Code's sandbox isolates the agent's commands (filesystem writes, no outbound network). Ubuntu 24.04
+      # restricts the unprivileged user namespaces that bubblewrap and the sandbox's seccomp helper (a nested
+      # namespace) need. Lifting it is safe here: the runner VM exists for this job only.
       - name: Install the sandbox
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap socat
-          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
-            printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
-              'profile bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '  include if exists <local/bwrap>' '}' \
-              | sudo tee /etc/apparmor.d/bwrap > /dev/null
-            sudo systemctl reload apparmor
-          fi
-          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-net true
-          echo "bubblewrap works"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-net \
+            bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user true
+          echo "bubblewrap works, including a nested user namespace"
 
       - name: Write the task prompt
         env:
