@@ -90,6 +90,17 @@ jobs:
             exit 1
           fi
 
+          # The new branch must start from the current base: GitHub refuses a branch whose workflow files differ from
+          # it. The verified result only carries over if the base moved in workflows, tooling or docs.
+          git fetch --quiet origin "$BASE_REF"
+          MOVED=$(git diff --name-only "$GITHUB_SHA" FETCH_HEAD | grep -Ev '^\.github/|\.md$' || true)
+          if [ -n "$MOVED" ]; then
+            echo "::error::$BASE_REF changed application or test files since the agent started. Run the backfill again."
+            echo "$MOVED"
+            exit 1
+          fi
+          git checkout --quiet --detach FETCH_HEAD
+
           git config user.name "unit-test-agent[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git am --3way "$PATCH"
