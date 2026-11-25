@@ -38,7 +38,8 @@
     "failIfUnavailable": true,
     "allowUnsandboxedCommands": false,
     "network": {
-      "allowedDomains": []
+      "allowedDomains": [],
+      "allowAllUnixSockets": true
     },
     "credentials": {
       "envVars": [

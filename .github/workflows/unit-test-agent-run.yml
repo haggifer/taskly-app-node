@@ -98,17 +98,20 @@ jobs:
       - name: Install Claude Code
         run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
 
-      # Claude Code's sandbox isolates the agent's commands (filesystem writes, no outbound network). Ubuntu 24.04
-      # restricts the unprivileged user namespaces that bubblewrap and the sandbox's seccomp helper (a nested
-      # namespace) need. Lifting it is safe here: the runner VM exists for this job only.
+      # Claude Code's sandbox runs the agent's commands with their own PID and network namespaces and limited writes.
+      # Ubuntu 24.04 restricts the unprivileged user namespaces bubblewrap needs; lifting that is safe because this
+      # runner VM exists for one job. Hosted runners can't nest user namespaces, so the sandbox's seccomp layer
+      # (which only blocks Unix sockets) is off; Docker is stopped so its socket can't be used to leave the sandbox.
       - name: Install the sandbox
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap socat
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-net \
-            bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user true
-          echo "bubblewrap works, including a nested user namespace"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0 || true
+          sudo systemctl stop docker.socket docker.service containerd.service
+          ! docker info > /dev/null 2>&1
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid --unshare-net true
+          echo "bubblewrap works; Docker is stopped"
 
       - name: Write the task prompt
         env:
