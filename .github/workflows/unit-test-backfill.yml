@@ -132,7 +132,7 @@ jobs:
             printf '\n**Open the pull request:** %s\n' "$COMPARE" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # Pull requests opened with GITHUB_TOKEN don't trigger workflows, so CI is dispatched explicitly.
+      # GitHub holds pull_request runs on a PR opened with GITHUB_TOKEN for approval, so CI is dispatched explicitly.
       - name: Run CI on the new branch
         if: steps.push.outputs.pushed == 'true'
         run: gh workflow run ci.yml --repo "$REPOSITORY" --ref "$BRANCH"
