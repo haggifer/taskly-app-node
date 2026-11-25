@@ -159,11 +159,28 @@ jobs:
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
           DISABLE_AUTOUPDATER: "1"
           TEST_AGENT_RUN_DIR: ${{ runner.temp }}/test-agent
+        # The sandbox allows Unix sockets (no seccomp layer on hosted runners), so every socket that exists before the
+        # agent starts is hidden from it: systemd, D-Bus, snapd, Docker, and the runner's .NET diagnostic sockets.
         run: |
-          ALLOWED_TOOLS=$(node -p "require('./.github/test-agent/claude-settings.json').permissions.allow.join(',')")
+          {
+            sudo find /run -type s 2>/dev/null | while read -r socket; do
+              dir=$(dirname "$socket")
+              if [ "$dir" = "/run" ]; then echo "$socket"; else echo "$dir"; fi
+            done
+            find /tmp -maxdepth 2 -type s 2>/dev/null
+          } | sort -u > "$RUNNER_TEMP/hidden-sockets.txt"
+          SETTINGS="$RUNNER_TEMP/claude-settings.json"
+          node -e '
+            const fs = require("fs")
+            const settings = JSON.parse(fs.readFileSync(".github/test-agent/claude-settings.json", "utf8"))
+            const hidden = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/).filter(Boolean)
+            settings.sandbox.filesystem = { ...settings.sandbox.filesystem, denyRead: hidden }
+            fs.writeFileSync(process.argv[2], JSON.stringify(settings, null, 2))
+            console.log(`Hiding ${hidden.length} socket paths from the sandbox.`)' "$RUNNER_TEMP/hidden-sockets.txt" "$SETTINGS"
+          ALLOWED_TOOLS=$(node -p "require(process.argv[1]).permissions.allow.join(',')" "$SETTINGS")
           claude -p "$(cat "$RUN_DIR/prompt.md")" \
             --agent unit-test-agent \
-            --settings .github/test-agent/claude-settings.json \
+            --settings "$SETTINGS" \
             --add-dir "$RUN_DIR" \
             --tools Read,Glob,Grep,Edit,Write,Bash,Skill \
             --allowedTools "$ALLOWED_TOOLS" \
