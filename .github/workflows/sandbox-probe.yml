@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: [sysctl-both, weaker-nested]
+        host: [unix-sockets, unix-sockets-weaker]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -34,7 +34,8 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=0 || true
           echo "max_user_namespaces: $(sysctl -n user.max_user_namespaces)"
-          ls /proc/sys/kernel | grep -i userns || true
+          sudo systemctl stop docker.socket docker.service containerd.service || true
+          ls -l /var/run/docker.sock 2>&1 || true
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-net true && echo "single bwrap: ok" || echo "single bwrap: FAILED"
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-net bwrap --ro-bind / / --dev /dev --unshare-user true && echo "nested bwrap: ok" || echo "nested bwrap: FAILED"
       - name: Run three commands through the Claude Code sandbox
@@ -48,7 +49,8 @@ jobs:
           node -e '
             const s = require("./.github/test-agent/claude-settings.json")
             s.permissions.allow.push("Bash(node probe/proc-environ.mjs)")
-            if (process.env.HOST === "weaker-nested") s.sandbox.enableWeakerNestedSandbox = true
+            s.sandbox.network.allowAllUnixSockets = true
+            if (process.env.HOST === "unix-sockets-weaker") s.sandbox.enableWeakerNestedSandbox = true
             require("fs").writeFileSync(process.argv[1], JSON.stringify(s))' "$RUNNER_TEMP/probe-settings.json"
           ALLOWED=$(node -p "require(process.argv[1]).permissions.allow.join(',')" "$RUNNER_TEMP/probe-settings.json")
           TEST_AGENT_RUN_DIR="$RUN_DIR" claude -p "This is an infrastructure probe. Run exactly these three shell commands, one at a time, and print each command's complete output verbatim, then stop. 1) git status --short  2) node .github/test-agent/run-tests.mjs --app backend --tests tests/router.test.ts --out $RUN_DIR/verify/probe  3) node probe/proc-environ.mjs" \
