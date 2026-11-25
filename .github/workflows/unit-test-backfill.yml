@@ -77,6 +77,10 @@ jobs:
         run: |
           PATCH="$GITHUB_WORKSPACE/agent-output/agent.patch"
           if [ ! -s "$PATCH" ]; then echo "The agent produced no tests."; exit 0; fi
+          if [ "$(sha256sum "$PATCH" | cut -d ' ' -f 1)" != "$(cat verification/patch.sha256 2>/dev/null)" ]; then
+            echo "The patch differs from the one the gate verified."
+            exit 1
+          fi
 
           cd repo
           ALLOWED='^(backend/tests/[^ ]+\.ts|frontend/src/[^ ]+\.test\.tsx?|frontend/src/test/[^ ]+\.tsx?)$'

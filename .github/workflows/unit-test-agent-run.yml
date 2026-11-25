@@ -71,13 +71,14 @@ jobs:
           npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
 
       - name: Prepare the agent's inputs
+        id: prepare
         env:
           MODE: ${{ inputs.mode }}
           BASE_SHA: ${{ inputs.base-sha }}
           APP: ${{ inputs.app }}
           MAX_FILES: ${{ inputs.max-files }}
         run: |
-          mkdir -p "$RUN_DIR/out"
+          mkdir -p "$RUN_DIR"
           CHANGES=()
           if [ "$MODE" = "pr" ]; then
             node .github/test-agent/collect-changes.mjs --base "$BASE_SHA" --head HEAD --out "$RUN_DIR/changes.json"
@@ -90,7 +91,7 @@ jobs:
             node .github/test-agent/select-targets.mjs --baseline "$RUN_DIR/baseline" --app "$APP" \
               --max "$MAX_FILES" --out "$RUN_DIR/targets.json"
           fi
-          git rev-parse HEAD > "$RUN_DIR/out/start-sha"
+          echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git config user.name "unit-test-agent"
           git config user.email "unit-test-agent@users.noreply.github.com"
 
@@ -148,38 +149,56 @@ jobs:
             --disallowedTools WebFetch,WebSearch \
             --permission-mode dontAsk \
             --max-turns 120 \
-            --output-format stream-json --verbose > "$RUN_DIR/out/transcript.jsonl"
+            --output-format stream-json --verbose > "$RUNNER_TEMP/test-agent-transcript.jsonl"
 
+      # Built after the agent exits, in a directory it never had access to, so nothing it planted is shipped.
       - name: Package the agent's output
         if: always()
+        env:
+          START_SHA: ${{ steps.prepare.outputs.start-sha }}
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
         run: |
-          OUT="$RUN_DIR/out"
-          START=$(cat "$OUT/start-sha")
-          if [ -n "$(git rev-list "$START..HEAD")" ]; then
-            git format-patch --stdout "$START..HEAD" > "$OUT/agent.patch"
+          PKG="$RUNNER_TEMP/test-agent-package"
+          rm -rf "$PKG" && mkdir -p "$PKG"
+          if [ -n "$(git rev-list "$START_SHA..HEAD")" ]; then
+            git format-patch --stdout "$START_SHA..HEAD" > "$PKG/agent.patch"
+            git diff --stat "$START_SHA" HEAD >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -f "$RUN_DIR/report.md" ]; then
-            cp "$RUN_DIR/report.md" "$OUT/report.md"
+            head -c 60000 "$RUN_DIR/report.md" > "$PKG/report.md"
           else
-            printf '### 🧪 Unit test agent: no report\n\nThe agent stopped before writing its report (outcome: %s). See the workflow run.\n' \
-              "${{ steps.agent.outcome }}" > "$OUT/report.md"
+            printf '### Agent report: none\n\nThe agent stopped before writing its report (agent step: %s). See the workflow run.\n' \
+              "$AGENT_OUTCOME" > "$PKG/report.md"
           fi
-          [ -f "$RUN_DIR/changes.json" ] && cp "$RUN_DIR/changes.json" "$OUT/" || true
-          tail -n 1 "$OUT/transcript.jsonl" | node -e '
-            let text = ""; process.stdin.on("data", (d) => (text += d)).on("end", () => {
-              try {
-                const r = JSON.parse(text)
-                console.log(JSON.stringify({ turns: r.num_turns, durationMs: r.duration_ms, isError: r.is_error, subtype: r.subtype }))
-              } catch { console.log("{}") }
-            })' > "$OUT/run-meta.json"
-          git diff --stat "$START" HEAD >> "$GITHUB_STEP_SUMMARY" || true
+          cp "$RUNNER_TEMP/test-agent-transcript.jsonl" "$PKG/transcript.jsonl" 2>/dev/null || true
+
+      # The agent process holds the token; a prompt-injected agent could try to smuggle it into its output.
+      - name: Refuse output that contains a credential
+        if: always()
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          PKG="$RUNNER_TEMP/test-agent-package"
+          LEAKED=false
+          for file in "$PKG"/*; do
+            [ -f "$file" ] || continue
+            if { [ -n "$TOKEN" ] && grep -qF -- "$TOKEN" "$file"; } || grep -qE 'sk-ant-[A-Za-z0-9_-]{16,}' "$file"; then
+              LEAKED=true
+            fi
+          done
+          if [ "$LEAKED" = "true" ]; then
+            rm -f "$PKG"/*
+            printf '### Agent report: withheld\n\nThe agent output contained a credential-shaped string, so nothing from this run is published.\n' > "$PKG/report.md"
+            echo "::error::The agent output contained a credential-shaped string and was discarded."
+            exit 1
+          fi
 
       - name: Upload the agent's output
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-agent-output
-          path: ${{ runner.temp }}/test-agent/out/
+          path: ${{ runner.temp }}/test-agent-package/
           retention-days: 14
 
   gate:

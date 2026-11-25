@@ -9,7 +9,7 @@ inputs:
     required: false
     default: ""
   patch-dir:
-    description: Directory holding the agent patch file (*.patch) from the agent artifact.
+    description: Directory holding agent.patch from the agent artifact.
     required: true
   workspace:
     description: Path of a fresh checkout of the commit the agent started from.
@@ -57,14 +57,17 @@ runs:
       working-directory: ${{ inputs.workspace }}
       env:
         PATCH_DIR: ${{ inputs.patch-dir }}
+      # Exactly the file the publish job applies; its hash ties the published bytes to the verified ones.
       run: |
-        shopt -s nullglob
-        patches=("$PATCH_DIR"/*.patch)
-        if [ ${#patches[@]} -eq 0 ]; then
+        PATCH="$PATCH_DIR/agent.patch"
+        mkdir -p "$RUNNER_TEMP/test-agent-run/verification"
+        if [ ! -s "$PATCH" ]; then
           echo "The agent produced no patch."
+          echo "none" > "$RUNNER_TEMP/test-agent-run/verification/patch.sha256"
           exit 0
         fi
-        git -c user.name="unit-test-agent gate" -c user.email="gate@localhost" am --3way "${patches[@]}"
+        sha256sum "$PATCH" | cut -d ' ' -f 1 > "$RUNNER_TEMP/test-agent-run/verification/patch.sha256"
+        git -c user.name="unit-test-agent gate" -c user.email="gate@localhost" am --3way "$PATCH"
 
     - name: Verify the patch
       shell: bash
@@ -95,5 +98,6 @@ runs:
         path: |
           ${{ runner.temp }}/test-agent-run/verification/verification.json
           ${{ runner.temp }}/test-agent-run/verification/summary.md
+          ${{ runner.temp }}/test-agent-run/verification/patch.sha256
         if-no-files-found: ignore
         retention-days: 14
