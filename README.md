@@ -1,5 +1,15 @@
 # Taskly App Node
 
+## Unit test agent
+
+Every pull request from this repository runs a custom Claude Code agent (`.claude/agents/unit-test-agent.md`) with
+five skills (`.claude/skills/`). It writes or updates unit tests for the changed front-end and back-end code. A
+separate gate verifies them on a fresh runner before anything is pushed, and the results are posted on the pull
+request. *Actions → Unit Test Backfill* runs the same agent on the least-covered files.
+
+How it works, why it's built this way, and example runs: [SOLUTION.md](SOLUTION.md). The agent toolkit's own tests:
+`npm run test:agent-toolkit`.
+
 ## Setup
 
 ```sh
