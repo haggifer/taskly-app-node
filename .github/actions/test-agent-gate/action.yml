@@ -9,7 +9,7 @@ inputs:
     required: false
     default: ""
   patch-dir:
-    description: Directory holding the agent's aw-*.patch files (the agent artifact).
+    description: Directory holding the agent patch file (*.patch) from the agent artifact.
     required: true
   workspace:
     description: Path of a fresh checkout of the commit the agent started from.
@@ -59,7 +59,7 @@ runs:
         PATCH_DIR: ${{ inputs.patch-dir }}
       run: |
         shopt -s nullglob
-        patches=("$PATCH_DIR"/aw-*.patch)
+        patches=("$PATCH_DIR"/*.patch)
         if [ ${#patches[@]} -eq 0 ]; then
           echo "The agent produced no patch."
           exit 0

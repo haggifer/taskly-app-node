@@ -1,0 +1,120 @@
+name: Unit Test Backfill
+
+# Started by hand: the agent adds missing unit tests to the least-covered files of one application, the gate verifies
+# them, and this workflow opens a draft pull request with the verified tests and the agent's report.
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Application to backfill
+        type: choice
+        options: [backend, frontend]
+        required: true
+      max-files:
+        description: Most source files to cover in this run (1 to 12)
+        type: string
+        default: "8"
+
+permissions: {}
+
+concurrency:
+  group: unit-test-backfill-${{ inputs.app }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Agent and gate
+    uses: ./.github/workflows/unit-test-agent-run.yml
+    permissions:
+      contents: read
+    with:
+      mode: backfill
+      checkout-ref: ${{ github.sha }}
+      app: ${{ inputs.app }}
+      max-files: ${{ inputs.max-files }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  publish:
+    name: Open a draft pull request with the verified tests
+    needs: run
+    if: needs.run.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      APP: ${{ inputs.app }}
+      BRANCH: test-agent/backfill-${{ inputs.app }}-${{ github.run_id }}
+      BASE_REF: ${{ github.ref_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download the agent's output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-output
+          path: agent-output
+      - name: Download the gate results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-verification
+          path: verification
+
+      - name: Check out the commit the agent started from
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 0
+
+      # Applies the patch the gate verified. No repository code runs in this job.
+      - name: Push the verified tests to a new branch
+        id: push
+        run: |
+          PATCH="$GITHUB_WORKSPACE/agent-output/agent.patch"
+          if [ ! -s "$PATCH" ]; then echo "The agent produced no tests."; exit 0; fi
+
+          cd repo
+          ALLOWED='^(backend/tests/[^ ]+\.ts|frontend/src/[^ ]+\.test\.tsx?|frontend/src/test/[^ ]+\.tsx?)$'
+          OUTSIDE=$(git apply --numstat "$PATCH" | cut -f3 | grep -Ev "$ALLOWED" | grep . || true)
+          if [ -n "$OUTSIDE" ] || git apply --numstat "$PATCH" | cut -f3 | grep -q '\.\.\|=>'; then
+            echo "Refusing to push files outside the test globs: $OUTSIDE"
+            exit 1
+          fi
+
+          git config user.name "unit-test-agent[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git am --3way "$PATCH"
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open the draft pull request
+        if: steps.push.outputs.pushed == 'true'
+        run: |
+          TITLE=$(head -n 1 agent-output/report.md | sed -E 's/^#+ *//' | head -c 120)
+          [ -n "$TITLE" ] || TITLE="$APP: backfill unit tests"
+          ZWSP=$(printf '​')
+          {
+            tail -n +2 agent-output/report.md | head -c 40000 | sed "s/@/@$ZWSP/g"
+            echo
+            echo "---"
+            echo
+            echo "### Verified results (deterministic gate)"
+            echo
+            head -c 20000 verification/summary.md
+            echo
+            echo "<sub>[Backfill workflow run]($RUN_URL)</sub>"
+          } > body.md
+          gh pr create --repo "$REPOSITORY" --draft --base "$BASE_REF" --head "$BRANCH" \
+            --title "[unit-test-agent] $TITLE" --body-file body.md --label unit-test-agent \
+            || gh pr create --repo "$REPOSITORY" --draft --base "$BASE_REF" --head "$BRANCH" \
+            --title "[unit-test-agent] $TITLE" --body-file body.md
+
+      # Pull requests opened with GITHUB_TOKEN don't trigger workflows, so CI is dispatched explicitly.
+      - name: Run CI on the new branch
+        if: steps.push.outputs.pushed == 'true'
+        run: gh workflow run ci.yml --repo "$REPOSITORY" --ref "$BRANCH"

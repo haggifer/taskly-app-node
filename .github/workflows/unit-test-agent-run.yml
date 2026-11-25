@@ -1,0 +1,209 @@
+name: Unit test agent (reusable run)
+
+# Runs the custom unit-test agent with read-only permissions, then verifies its commit on a fresh runner.
+# Callers publish the result; nothing here can write to the repository.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "pr or backfill"
+        type: string
+        required: true
+      checkout-ref:
+        description: Commit the agent starts from
+        type: string
+        required: true
+      base-sha:
+        description: Pull request base commit (PR mode)
+        type: string
+        default: ""
+      app:
+        description: Application to backfill (backfill mode)
+        type: string
+        default: ""
+      max-files:
+        description: Most source files to cover (backfill mode)
+        type: string
+        default: "8"
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+    outputs:
+      agent-outcome:
+        description: success or failure of the agent step
+        value: ${{ jobs.agent.outputs.outcome }}
+
+permissions:
+  contents: read
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.326"
+
+jobs:
+  agent:
+    name: Run the unit-test agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      outcome: ${{ steps.agent.outcome }}
+    env:
+      RUN_DIR: ${{ runner.temp }}/test-agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install dependencies without lifecycle scripts
+        run: |
+          npm ci --prefix backend --ignore-scripts --no-audit --no-fund
+          (cd backend && npx --no-install prisma generate)
+          npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
+
+      - name: Prepare the agent's inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          BASE_SHA: ${{ inputs.base-sha }}
+          APP: ${{ inputs.app }}
+          MAX_FILES: ${{ inputs.max-files }}
+        run: |
+          mkdir -p "$RUN_DIR/out"
+          CHANGES=()
+          if [ "$MODE" = "pr" ]; then
+            node .github/test-agent/collect-changes.mjs --base "$BASE_SHA" --head HEAD --out "$RUN_DIR/changes.json"
+            CHANGES=(--changes "$RUN_DIR/changes.json")
+          fi
+          for app in backend frontend; do
+            node .github/test-agent/run-tests.mjs --app "$app" "${CHANGES[@]}" --out "$RUN_DIR/baseline/$app" || true
+          done
+          if [ "$MODE" = "backfill" ]; then
+            node .github/test-agent/select-targets.mjs --baseline "$RUN_DIR/baseline" --app "$APP" \
+              --max "$MAX_FILES" --out "$RUN_DIR/targets.json"
+          fi
+          git rev-parse HEAD > "$RUN_DIR/out/start-sha"
+          git config user.name "unit-test-agent"
+          git config user.email "unit-test-agent@users.noreply.github.com"
+
+      - name: Install Claude Code
+        run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+
+      - name: Write the task prompt
+        env:
+          MODE: ${{ inputs.mode }}
+          APP: ${{ inputs.app }}
+        run: |
+          if [ "$MODE" = "pr" ]; then
+            cat > "$RUN_DIR/prompt.md" <<EOF
+          Work in **PR mode**. Run directory: \`$RUN_DIR\`.
+
+          - \`$RUN_DIR/changes.json\` is the change manifest. The checkout is the pull request's head.
+          - \`$RUN_DIR/baseline/<app>/result.json\` is the existing suite before your changes.
+
+          Decide from the code alone. Follow your process: analyze every changed file, write or update tests where
+          needed, verify them, commit them with the message \`test: add unit tests for <short scope> [unit-test-agent]\`,
+          and write the report to \`$RUN_DIR/report.md\`.
+          EOF
+          else
+            cat > "$RUN_DIR/prompt.md" <<EOF
+          Work in **backfill mode** on the \`$APP\` application. Run directory: \`$RUN_DIR\`.
+
+          - \`$RUN_DIR/targets.json\` lists the source files to cover, least covered first.
+          - \`$RUN_DIR/baseline/<app>/result.json\` is the existing suite before your changes.
+
+          Take the targets in order and decide \`write\`, \`update\` or \`skip-not-testable\` for each. Aim for meaningful
+          assertions on each file's public behavior, covering its branches and error paths. Verify every test file,
+          then run the whole \`$APP\` suite once with \`--targets\` set to all target files for the before/after
+          coverage. Commit with the message \`test($APP): backfill unit tests [unit-test-agent]\` and write the report
+          to \`$RUN_DIR/report.md\`, starting with a \`# $APP: backfill unit tests for <short scope>\` line and including
+          a before/after coverage table per target file.
+          EOF
+          fi
+
+      - name: Run the agent
+        id: agent
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          DISABLE_AUTOUPDATER: "1"
+          TEST_AGENT_RUN_DIR: ${{ runner.temp }}/test-agent
+        run: |
+          ALLOWED_TOOLS=$(node -p "require('./.github/test-agent/claude-settings.json').permissions.allow.join(',')")
+          claude -p "$(cat "$RUN_DIR/prompt.md")" \
+            --agent unit-test-agent \
+            --settings .github/test-agent/claude-settings.json \
+            --tools Read,Glob,Grep,Edit,Write,Bash,Skill \
+            --allowedTools "$ALLOWED_TOOLS" \
+            --disallowedTools WebFetch,WebSearch \
+            --permission-mode dontAsk \
+            --max-turns 120 \
+            --output-format stream-json --verbose > "$RUN_DIR/out/transcript.jsonl"
+
+      - name: Package the agent's output
+        if: always()
+        run: |
+          OUT="$RUN_DIR/out"
+          START=$(cat "$OUT/start-sha")
+          if [ -n "$(git rev-list "$START..HEAD")" ]; then
+            git format-patch --stdout "$START..HEAD" > "$OUT/agent.patch"
+          fi
+          if [ -f "$RUN_DIR/report.md" ]; then
+            cp "$RUN_DIR/report.md" "$OUT/report.md"
+          else
+            printf '### 🧪 Unit test agent: no report\n\nThe agent stopped before writing its report (outcome: %s). See the workflow run.\n' \
+              "${{ steps.agent.outcome }}" > "$OUT/report.md"
+          fi
+          [ -f "$RUN_DIR/changes.json" ] && cp "$RUN_DIR/changes.json" "$OUT/" || true
+          tail -n 1 "$OUT/transcript.jsonl" | node -e '
+            let text = ""; process.stdin.on("data", (d) => (text += d)).on("end", () => {
+              try {
+                const r = JSON.parse(text)
+                console.log(JSON.stringify({ turns: r.num_turns, durationMs: r.duration_ms, isError: r.is_error, subtype: r.subtype }))
+              } catch { console.log("{}") }
+            })' > "$OUT/run-meta.json"
+          git diff --stat "$START" HEAD >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload the agent's output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-agent-output
+          path: ${{ runner.temp }}/test-agent/out/
+          retention-days: 14
+
+  gate:
+    name: Verify the agent's tests (deterministic gate)
+    needs: agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the commit the agent started from
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout-ref }}
+          path: test-agent-workspace
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Download the agent's output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-agent-output
+          path: ${{ runner.temp }}/agent-output
+      - uses: ./test-agent-workspace/.github/actions/test-agent-gate
+        with:
+          base-sha: ${{ inputs.base-sha }}
+          patch-dir: ${{ runner.temp }}/agent-output
+          workspace: test-agent-workspace

@@ -1,0 +1,152 @@
+name: Unit Test Agent
+
+# On every pull request from this repository: the agent writes or updates unit tests for the changed code (read-only
+# job), a fresh runner verifies them (gate), and only then this workflow pushes the tests and comments the results.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: unit-test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    name: Agent and gate
+    # Fork pull requests never get the agent's secret or budget; drafts and opted-out PRs are skipped.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-test-agent')
+    uses: ./.github/workflows/unit-test-agent-run.yml
+    permissions:
+      contents: read
+    with:
+      mode: pr
+      checkout-ref: ${{ github.event.pull_request.head.sha }}
+      base-sha: ${{ github.event.pull_request.base.sha }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  publish:
+    name: Publish verified tests and results
+    needs: run
+    if: always() && (needs.run.result == 'success' || needs.run.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GATE_RESULT: ${{ needs.run.result }}
+      AGENT_OUTCOME: ${{ needs.run.outputs.agent-outcome }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download the agent's output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: test-agent-output
+          path: agent-output
+      - name: Download the gate results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: test-agent-verification
+          path: verification
+
+      - name: Check out the pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: repo
+          fetch-depth: 0
+
+      # Applies the patch only after the gate passed. No pull request code runs in this job.
+      - name: Push the verified tests to the pull request branch
+        id: push
+        run: |
+          PATCH="$GITHUB_WORKSPACE/agent-output/agent.patch"
+          if [ ! -s "$PATCH" ]; then echo "status=no-changes" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$GATE_RESULT" != "success" ]; then echo "status=gate-failed" >> "$GITHUB_OUTPUT"; exit 0; fi
+
+          cd repo
+          ALLOWED='^(backend/tests/[^ ]+\.ts|frontend/src/[^ ]+\.test\.tsx?|frontend/src/test/[^ ]+\.tsx?)$'
+          OUTSIDE=$(git apply --numstat "$PATCH" | cut -f3 | grep -Ev "$ALLOWED" | grep . || true)
+          if [ -n "$OUTSIDE" ] || git apply --numstat "$PATCH" | cut -f3 | grep -q '\.\.\|=>'; then
+            echo "Refusing to push files outside the test globs: $OUTSIDE"
+            echo "status=out-of-scope" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          git config user.name "unit-test-agent[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git am --3way "$PATCH"
+          if git push origin "HEAD:refs/heads/$HEAD_REF"; then
+            echo "status=pushed" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=stale" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Pushes made with GITHUB_TOKEN don't trigger workflows, so CI is dispatched explicitly for the new commit.
+      - name: Run CI on the pushed commit
+        if: steps.push.outputs.status == 'pushed'
+        run: gh workflow run ci.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
+
+      - name: Create or update the results comment
+        if: always()
+        env:
+          PUSH_STATUS: ${{ steps.push.outputs.status }}
+          PUSHED_SHA: ${{ steps.push.outputs.sha }}
+        run: |
+          MARKER='<!-- unit-test-agent:results -->'
+          case "$PUSH_STATUS" in
+            pushed) STATUS="✅ Verified tests pushed to this branch in \`$PUSHED_SHA\`. CI was started for that commit." ;;
+            no-changes) STATUS="➖ No test changes to push." ;;
+            gate-failed) STATUS="❌ The gate rejected the agent's tests, so nothing was pushed." ;;
+            stale) STATUS="⚠️ The branch moved while the agent ran, so nothing was pushed. The next run starts from the new head." ;;
+            out-of-scope) STATUS="❌ The patch touched files outside the test globs, so nothing was pushed." ;;
+            *) STATUS="❌ Publishing failed. See the workflow run." ;;
+          esac
+          ZWSP=$(printf '​')
+          {
+            echo "$MARKER"
+            echo "## 🧪 Unit test agent"
+            echo
+            echo "$STATUS"
+            echo
+            echo "<sub>Commit \`${HEAD_SHA:0:7}\` · agent step: \`${AGENT_OUTCOME:-unknown}\` · [workflow run]($RUN_URL)</sub>"
+            echo
+            if [ -f agent-output/report.md ]; then
+              head -c 40000 agent-output/report.md | sed "s/@/@$ZWSP/g"
+            else
+              echo "The agent produced no report."
+            fi
+            echo
+            echo "---"
+            echo
+            echo "### Verified results (deterministic gate)"
+            echo
+            if [ -f verification/summary.md ]; then
+              head -c 20000 verification/summary.md
+            else
+              echo "➖ The gate produced no results. See the workflow run."
+            fi
+          } > comment.md
+
+          COMMENT_ID=$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .id" | tail -n 1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$COMMENT_ID" -F body=@comment.md > /dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -F body=@comment.md > /dev/null
+          fi
