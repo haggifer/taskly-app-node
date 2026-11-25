@@ -4,14 +4,14 @@
 
 | File | Change | Decision | Reason |
 |---|---|---|---|
-| `backend/src/features/todos/router.ts` | new `DELETE /completed` route | write → `backend/tests/router.test.ts` | new route with 2 outcomes |
+| `backend/src/features/todos/validators.ts` | titles are trimmed before the length check | update → `backend/tests/validators.test.ts` | an existing test pins the untrimmed rule |
 | `README.md` | docs | skip-not-testable | not application source |
 
 **Tests**
 
 | Test file | Added | Updated | Covers |
 |---|---|---|---|
-| `backend/tests/router.test.ts` | 3 | 1 | success, empty list, store error |
+| `backend/tests/validators.test.ts` | 2 | 1 | trimmed title, whitespace-only title, length limit after trimming |
 
 **Verification** (targeted runs, 2× shuffled, with typecheck and Prettier)
 
