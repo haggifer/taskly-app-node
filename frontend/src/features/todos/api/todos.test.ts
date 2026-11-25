@@ -60,6 +60,14 @@ it('deletes a task by id', async () => {
   expect(request).toHaveBeenCalledWith('/todos/7', { method: 'DELETE' })
 })
 
+it('deletes every completed task and returns the deleted count', async () => {
+  vi.mocked(request).mockResolvedValue({ deleted: 2 })
+  await expect(todosApi.clearCompleted()).resolves.toEqual({ deleted: 2 })
+  expect(request).toHaveBeenCalledWith('/todos/completed', {
+    method: 'DELETE',
+  })
+})
+
 it('propagates request errors', async () => {
   vi.mocked(request).mockRejectedValue(new Error('Server unavailable.'))
   await expect(todosApi.remove(7)).rejects.toThrow('Server unavailable.')
