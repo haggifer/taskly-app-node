@@ -103,7 +103,7 @@ jobs:
             echo "status=stale" >> "$GITHUB_OUTPUT"
           fi
 
-      # Pushes made with GITHUB_TOKEN don't trigger workflows, so CI is dispatched explicitly for the new commit.
+      # GitHub holds pull_request runs from GITHUB_TOKEN pushes for approval, so CI is dispatched for the new commit.
       - name: Run CI on the pushed commit
         if: steps.push.outputs.status == 'pushed'
         run: gh workflow run ci.yml --repo "$REPOSITORY" --ref "$HEAD_REF"
