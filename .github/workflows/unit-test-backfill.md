@@ -63,6 +63,8 @@ safe-outputs:
     protected-files: blocked
     fallback-as-issue: false
   noop:
+    report-as-issue: false
+  report-failure-as-issue: false
   threat-detection:
     continue-on-error: false
     steps:

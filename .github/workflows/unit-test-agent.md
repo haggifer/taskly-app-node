@@ -55,6 +55,8 @@ safe-outputs:
     max: 1
     hide-older-comments: true
   noop:
+    report-as-issue: false
+  report-failure-as-issue: false
   threat-detection:
     continue-on-error: false
     steps:
