@@ -1,13 +1,22 @@
 import { execFileSync } from 'node:child_process'
 
 const MAX_BUFFER = 64 * 1024 * 1024
-// Pull request code may have run in this checkout, so repository config must not be able to run anything.
+// Pull request code may have run in this checkout, so repository config must not be able to run anything: no
+// fsmonitor, hooks, pager or system/global config, and every diff call passes --no-ext-diff --no-textconv.
 const SAFE_GIT_OPTIONS = [
   '-c',
   'core.fsmonitor=false',
   '-c',
   'core.hooksPath=/dev/null',
+  '-c',
+  'core.pager=cat',
+  '--no-pager',
 ]
+const SAFE_GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: '/dev/null',
+}
 
 const STATUS_NAMES = {
   A: 'added',
@@ -22,6 +31,7 @@ export const runGit = (args, cwd = process.cwd()) =>
   execFileSync('git', [...SAFE_GIT_OPTIONS, ...args], {
     cwd,
     encoding: 'utf8',
+    env: SAFE_GIT_ENV,
     maxBuffer: MAX_BUFFER,
   })
 
@@ -60,19 +70,50 @@ export const parseAddedText = (diffOutput) =>
 export const getChangedFiles = (base, head, cwd) =>
   parseNameStatus(
     runGit(
-      ['diff', '--name-status', '-M', '--no-color', `${base}...${head}`],
+      [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--name-status',
+        '-M',
+        '--no-color',
+        `${base}...${head}`,
+      ],
       cwd,
     ),
   )
 
 export const getChangedLines = (base, head, path, cwd) =>
   parseAddedLines(
-    runGit(['diff', '-U0', '--no-color', `${base}...${head}`, '--', path], cwd),
+    runGit(
+      [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '-U0',
+        '--no-color',
+        `${base}...${head}`,
+        '--',
+        path,
+      ],
+      cwd,
+    ),
   )
 
 export const getWorkingTreeChanges = (since, cwd) => {
   const tracked = parseNameStatus(
-    runGit(['diff', '--name-status', '-M', '--no-color', since], cwd),
+    runGit(
+      [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--name-status',
+        '-M',
+        '--no-color',
+        since,
+      ],
+      cwd,
+    ),
   ).map((change) => ({ ...change, isUntracked: false }))
   const untracked = runGit(['ls-files', '--others', '--exclude-standard'], cwd)
     .split('\n')
@@ -88,4 +129,18 @@ export const getWorkingTreeChanges = (since, cwd) => {
 }
 
 export const getWorkingTreeAddedText = (since, path, cwd) =>
-  parseAddedText(runGit(['diff', '-U0', '--no-color', since, '--', path], cwd))
+  parseAddedText(
+    runGit(
+      [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '-U0',
+        '--no-color',
+        since,
+        '--',
+        path,
+      ],
+      cwd,
+    ),
+  )
