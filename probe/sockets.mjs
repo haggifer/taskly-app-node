@@ -47,8 +47,12 @@ const tryConnect = (path) =>
 
 const sockets = [...new Set(ROOTS.flatMap((root) => findSockets(root)))]
 
-console.log(`sockets visible: ${sockets.length}`)
+const results = []
 
-for (const path of sockets) {
-  console.log(`${path}: ${await tryConnect(path)}`)
-}
+for (const path of sockets) results.push([path, await tryConnect(path)])
+
+console.log(
+  `sockets visible: ${sockets.length}, connected: ${results.filter(([, r]) => r === 'CONNECTED').length}`,
+)
+for (const [path, result] of results)
+  if (result === 'CONNECTED') console.log(`CONNECTED ${path}`)
