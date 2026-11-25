@@ -109,10 +109,13 @@ jobs:
             echo
             echo "<sub>[Backfill workflow run]($RUN_URL)</sub>"
           } > body.md
-          gh pr create --repo "$REPOSITORY" --draft --base "$BASE_REF" --head "$BRANCH" \
-            --title "[unit-test-agent] $TITLE" --body-file body.md --label unit-test-agent \
-            || gh pr create --repo "$REPOSITORY" --draft --base "$BASE_REF" --head "$BRANCH" \
-            --title "[unit-test-agent] $TITLE" --body-file body.md
+          cat body.md >> "$GITHUB_STEP_SUMMARY"
+          if ! gh pr create --repo "$REPOSITORY" --draft --base "$BASE_REF" --head "$BRANCH" \
+            --title "[unit-test-agent] $TITLE" --body-file body.md; then
+            COMPARE="$GITHUB_SERVER_URL/$REPOSITORY/compare/$BASE_REF...$BRANCH?expand=1"
+            echo "::warning::Could not open the pull request (the repository may not allow GitHub Actions to create pull requests). Open it from $COMPARE"
+            printf '\n**Open the pull request:** %s\n' "$COMPARE" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # Pull requests opened with GITHUB_TOKEN don't trigger workflows, so CI is dispatched explicitly.
       - name: Run CI on the new branch

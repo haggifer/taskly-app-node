@@ -46,9 +46,10 @@ jobs:
     timeout-minutes: 45
     outputs:
       outcome: ${{ steps.agent.outcome }}
-    env:
-      RUN_DIR: ${{ runner.temp }}/test-agent
     steps:
+      - name: Set the run directory
+        run: echo "RUN_DIR=$RUNNER_TEMP/test-agent" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.checkout-ref }}
