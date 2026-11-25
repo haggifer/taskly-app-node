@@ -27,6 +27,7 @@ jobs:
       mode: pr
       checkout-ref: ${{ github.event.pull_request.head.sha }}
       base-sha: ${{ github.event.pull_request.base.sha }}
+      base-ref: ${{ github.event.pull_request.base.ref }}
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 

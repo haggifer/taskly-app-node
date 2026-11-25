@@ -14,7 +14,11 @@ on:
         type: string
         required: true
       base-sha:
-        description: Pull request base commit (PR mode)
+        description: Pull request base commit, for the diff (PR mode)
+        type: string
+        default: ""
+      base-ref:
+        description: Pull request base branch, whose current tip supplies the trusted agent files (PR mode)
         type: string
         default: ""
       app:
@@ -46,6 +50,7 @@ jobs:
     timeout-minutes: 45
     outputs:
       outcome: ${{ steps.agent.outcome }}
+      trusted-sha: ${{ steps.trusted.outputs.trusted-sha }}
     steps:
       - name: Set the run directory
         run: echo "RUN_DIR=$RUNNER_TEMP/test-agent" >> "$GITHUB_ENV"
@@ -64,28 +69,36 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
+      # A pull request must not be able to rewrite the instructions, skills, settings, guard or toolkit of the agent
+      # that reviews it. They come from the current tip of the base branch (the event's base.sha can be stale), into a
+      # root-owned, read-only copy made before any PR code runs, including dependency installation.
+      - name: Extract the trusted agent files
+        id: trusted
+        env:
+          BASE_REF: ${{ inputs.base-ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            TRUSTED_SHA=$(git rev-parse --verify "refs/remotes/origin/$BASE_REF^{commit}")
+          else
+            TRUSTED_SHA=$(git rev-parse HEAD)
+          fi
+          TRUSTED=/opt/test-agent-trusted
+          sudo mkdir -p "$TRUSTED"
+          git archive "$TRUSTED_SHA" .claude .github/test-agent | sudo tar -x -C "$TRUSTED"
+          sudo chown -R root:root "$TRUSTED" && sudo chmod -R a-w,a+rX "$TRUSTED"
+          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
+          echo "trusted-sha=$TRUSTED_SHA" >> "$GITHUB_OUTPUT"
+          echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Trusted agent files from $TRUSTED_SHA"
+          if ! git diff --quiet "$TRUSTED_SHA" HEAD -- .claude .github/test-agent; then
+            echo "::notice::This pull request changes the agent's own files; the run uses the base branch's versions."
+          fi
+
       - name: Install dependencies without lifecycle scripts
         run: |
           npm ci --prefix backend --ignore-scripts --no-audit --no-fund
           (cd backend && npx --no-install prisma generate)
           npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
-
-      # A pull request must not be able to rewrite the instructions, skills, settings, guard or toolkit of the agent
-      # that reviews it. They come from the base branch, into a root-owned, read-only copy made before any PR code runs.
-      - name: Extract the trusted agent files
-        id: trusted
-        env:
-          TRUSTED_REF: ${{ inputs.base-sha || inputs.checkout-ref }}
-        run: |
-          TRUSTED=/opt/test-agent-trusted
-          sudo mkdir -p "$TRUSTED"
-          git archive "$TRUSTED_REF" .claude .github/test-agent | sudo tar -x -C "$TRUSTED"
-          sudo chown -R root:root "$TRUSTED" && sudo chmod -R a-w,a+rX "$TRUSTED"
-          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
-          echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if ! git diff --quiet "$TRUSTED_REF" HEAD -- .claude .github/test-agent; then
-            echo "::notice::This pull request changes the agent's own files; the run uses the base branch's versions."
-          fi
 
       - name: Install Claude Code
         run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
@@ -298,7 +311,7 @@ jobs:
       - name: Check out the trusted gate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.base-sha || inputs.checkout-ref }}
+          ref: ${{ needs.agent.outputs.trusted-sha }}
           path: test-agent-trusted
           sparse-checkout: |
             .github/actions
