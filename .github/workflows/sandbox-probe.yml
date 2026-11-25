@@ -49,11 +49,18 @@ jobs:
           HOST: ${{ matrix.host }}
         run: |
           RUN_DIR="$RUNNER_TEMP/test-agent"; mkdir -p "$RUN_DIR/verify"
+          export HIDDEN="$RUNNER_TEMP/hidden-sockets.txt"
+          sudo find /run -type s 2>/dev/null | while read -r socket; do
+            dir=$(dirname "$socket"); if [ "$dir" = "/run" ]; then echo "$socket"; else echo "$dir"; fi
+          done | sort -u > "$HIDDEN"
+          cat "$HIDDEN"
           node -e '
             const s = require("./.github/test-agent/claude-settings.json")
             s.permissions.allow.push("Bash(node probe/proc-environ.mjs)")
             s.sandbox.network.allowAllUnixSockets = true
-            s.sandbox.filesystem = { denyRead: ["/run", "/var/run"] }
+            const hidden = require("fs").readFileSync(process.env.HIDDEN, "utf8").split(/\r?\n/).filter(Boolean)
+            s.sandbox.filesystem = { denyRead: hidden }
+            console.log("denyRead entries:", hidden.length)
             s.permissions.allow.push("Bash(node probe/sockets.mjs)")
             require("fs").writeFileSync(process.argv[1], JSON.stringify(s))' "$RUNNER_TEMP/probe-settings.json"
           ALLOWED=$(node -p "require(process.argv[1]).permissions.allow.join(',')" "$RUNNER_TEMP/probe-settings.json")
