@@ -4,6 +4,7 @@ import {
   assertRevision,
   readOptions,
   requireOption,
+  resolveOutPath,
   runCli,
   writeJson,
 } from './lib/cli.mjs'
@@ -68,7 +69,7 @@ runCli(() => {
   const values = readOptions(OPTIONS)
   const base = assertRevision(requireOption(values, 'base'), 'base')
   const head = assertRevision(values.head, 'head')
-  const out = requireOption(values, 'out')
+  const out = resolveOutPath(requireOption(values, 'out'))
 
   const files = getChangedFiles(base, head, REPO_ROOT).map((change) =>
     describeChange(base, head, change),

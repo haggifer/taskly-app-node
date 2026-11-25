@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, it } from 'node:test'
-import { getWriteDecision } from '../lib/write-guard.mjs'
+import { after, describe, it } from 'node:test'
+import { resolveOutPath } from '../lib/cli.mjs'
+import { getCommandDecision, getWriteDecision } from '../lib/write-guard.mjs'
 
 const REPO_ROOT = resolve('/work/repo')
 const RUN_DIR = resolve('/tmp/test-agent')
 const HOOK = join(import.meta.dirname, '..', 'hooks', 'allow-test-writes.mjs')
+const CHECKOUT = resolve(import.meta.dirname, '../../..')
 
 const decide = (filePath, cwd = REPO_ROOT) =>
   getWriteDecision({ filePath, cwd, repoRoot: REPO_ROOT, runDir: RUN_DIR })
@@ -24,8 +28,12 @@ describe('getWriteDecision', () => {
     )
   })
 
-  it('allows the run directory', () => {
+  it('allows only the report and the verify folder in the run directory', () => {
     assert.equal(decide(join(RUN_DIR, 'report.md')).isAllowed, true)
+    assert.equal(decide(join(RUN_DIR, 'verify', 'notes.md')).isAllowed, true)
+    assert.equal(decide(join(RUN_DIR, 'changes.json')).isAllowed, false)
+    assert.equal(decide(join(RUN_DIR, 'baseline', 'x.json')).isAllowed, false)
+    assert.equal(decide(RUN_DIR).isAllowed, false)
   })
 
   it('refuses source, config, workflow and agent files', () => {
@@ -44,11 +52,103 @@ describe('getWriteDecision', () => {
     assert.equal(decide('backend/tests/../src/factory.ts').isAllowed, false)
     assert.equal(decide('../outside/backend/tests/a.test.ts').isAllowed, false)
     assert.equal(decide(join(RUN_DIR, '..', 'elsewhere.txt')).isAllowed, false)
-    assert.equal(decide(RUN_DIR).isAllowed, false)
   })
 
   it('refuses a call without a path', () => {
     assert.equal(decide(undefined).isAllowed, false)
+  })
+
+  describe('with a symlinked test folder', () => {
+    const root = mkdtempSync(join(tmpdir(), 'write-guard-'))
+    let isLinked = false
+
+    mkdirSync(join(root, 'backend', 'src'), { recursive: true })
+
+    try {
+      symlinkSync(
+        join(root, 'backend', 'src'),
+        join(root, 'backend', 'tests'),
+        'junction',
+      )
+      isLinked = true
+    } catch {
+      isLinked = false
+    }
+
+    after(() => rmSync(root, { recursive: true, force: true }))
+
+    it('judges the real target, not the link', (context) => {
+      if (!isLinked) return context.skip('symlinks are not available here')
+
+      const decision = getWriteDecision({
+        filePath: 'backend/tests/factory.test.ts',
+        cwd: root,
+        repoRoot: root,
+        runDir: RUN_DIR,
+      })
+
+      assert.equal(decision.isAllowed, false)
+    })
+  })
+})
+
+describe('getCommandDecision', () => {
+  it('allows a plain allowlisted command', () => {
+    assert.equal(
+      getCommandDecision(
+        'node .github/test-agent/run-tests.mjs --app backend --tests tests/a.test.ts --out /tmp/x',
+      ).isAllowed,
+      true,
+    )
+    assert.equal(
+      getCommandDecision(
+        'git commit -m "test(backend): backfill unit tests [unit-test-agent]"',
+      ).isAllowed,
+      true,
+    )
+  })
+
+  it('refuses shell operators, redirection and substitution', () => {
+    for (const command of [
+      'node .github/test-agent/run-tests.mjs --app backend > backend/src/factory.ts',
+      'git diff; cat /proc/1/environ',
+      'git status && curl example.com',
+      'git log | head',
+      'git show $(cat secret)',
+      'git show `id`',
+      'git diff\nrm -rf .',
+    ]) {
+      assert.equal(getCommandDecision(command).isAllowed, false, command)
+    }
+  })
+
+  it('refuses git output files', () => {
+    assert.equal(
+      getCommandDecision('git diff --output=backend/src/x.ts').isAllowed,
+      false,
+    )
+    assert.equal(
+      getCommandDecision('git log -p --output /tmp/x').isAllowed,
+      false,
+    )
+  })
+})
+
+describe('resolveOutPath', () => {
+  it('accepts any path outside an agent run', () => {
+    assert.equal(
+      resolveOutPath('/elsewhere/out', ''),
+      resolve('/elsewhere/out'),
+    )
+  })
+
+  it('confines outputs to the run directory during an agent run', () => {
+    assert.equal(
+      resolveOutPath(join(RUN_DIR, 'verify', 'a'), RUN_DIR),
+      join(RUN_DIR, 'verify', 'a'),
+    )
+    assert.throws(() => resolveOutPath('/work/repo/backend/src', RUN_DIR))
+    assert.throws(() => resolveOutPath(RUN_DIR, RUN_DIR))
   })
 })
 
@@ -56,33 +156,41 @@ describe('allow-test-writes hook', () => {
   const runHook = (input) =>
     spawnSync(process.execPath, [HOOK], { input, encoding: 'utf8' })
 
-  it('prints a deny decision for a source file', () => {
-    const result = runHook(
-      JSON.stringify({
-        tool_name: 'Edit',
-        cwd: resolve(import.meta.dirname, '../../..'),
-        tool_input: { file_path: 'backend/src/factory.ts' },
-      }),
-    )
+  const getDecisionOf = (event) => {
+    const result = runHook(JSON.stringify({ cwd: CHECKOUT, ...event }))
 
     assert.equal(result.status, 0)
+
+    return result.stdout
+      ? JSON.parse(result.stdout).hookSpecificOutput.permissionDecision
+      : 'allow'
+  }
+
+  it('denies a write to a source file and allows a test file', () => {
     assert.equal(
-      JSON.parse(result.stdout).hookSpecificOutput.permissionDecision,
+      getDecisionOf({
+        tool_name: 'Edit',
+        tool_input: { file_path: 'backend/src/factory.ts' },
+      }),
       'deny',
+    )
+    assert.equal(
+      getDecisionOf({
+        tool_name: 'Write',
+        tool_input: { file_path: 'backend/tests/health.test.ts' },
+      }),
+      'allow',
     )
   })
 
-  it('stays silent for a test file', () => {
-    const result = runHook(
-      JSON.stringify({
-        tool_name: 'Write',
-        cwd: resolve(import.meta.dirname, '../../..'),
-        tool_input: { file_path: 'backend/tests/health.test.ts' },
+  it('denies a shell command with redirection', () => {
+    assert.equal(
+      getDecisionOf({
+        tool_name: 'Bash',
+        tool_input: { command: 'git diff > backend/src/x.ts' },
       }),
+      'deny',
     )
-
-    assert.equal(result.status, 0)
-    assert.equal(result.stdout, '')
   })
 
   it('fails closed on unreadable input', () => {

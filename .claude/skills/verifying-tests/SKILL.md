@@ -8,11 +8,16 @@ description: Runs the tests the unit-test agent wrote, twice in shuffled order w
 A test is done when it passes twice in shuffled order, the typecheck is clean, and (front end) Prettier is clean.
 A test that "should pass" doesn't count.
 
+Run each command on its own, from the repository root. Pipes, redirection, `;`, `&&` and `$(...)` are refused, and
+so is `--output`. Read files with the Read tool, not the shell.
+
 ## 1. Format (front end)
 
 ```bash
-node frontend/node_modules/prettier/bin/prettier.cjs --write <frontend test files>
+node .github/test-agent/format-tests.mjs src/lib/http.test.ts src/hooks/useNotice.test.ts
 ```
+
+It accepts front-end test files only (paths relative to `frontend/` or to the repository root).
 
 ## 2. Run the targeted check
 

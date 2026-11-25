@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readOptions, requireOption, runCli, writeJson } from './lib/cli.mjs'
+import {
+  readOptions,
+  requireOption,
+  resolveOutPath,
+  runCli,
+  writeJson,
+} from './lib/cli.mjs'
 import { selectTargets } from './lib/targets.mjs'
 import { REPO_ROOT } from './lib/tools.mjs'
 
@@ -41,7 +47,7 @@ runCli(() => {
   )
   const maxFiles = getBoundedInteger(values.max, 'max', 1, MAX_FILES_LIMIT)
   const threshold = getBoundedInteger(values.threshold, 'threshold', 1, 100)
-  const out = requireOption(values, 'out')
+  const out = resolveOutPath(requireOption(values, 'out'))
 
   const summaryMap = JSON.parse(readFileSync(summaryPath, 'utf8'))
   const targets = selectTargets({

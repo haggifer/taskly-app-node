@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import {
   readOptions,
   requireOption,
+  resolveOutPath,
   runCli,
   splitList,
   writeJson,
@@ -176,7 +177,7 @@ runCli(() => {
   const testFiles = getTestFiles(app, values.tests)
   const targets = getTargets(app, values.targets)
   const repeat = getRepeat(values.repeat)
-  const out = requireOption(values, 'out')
+  const out = resolveOutPath(requireOption(values, 'out'))
   const changedSources = readChangedSources(values.changes, app)
 
   const appTestFiles = testFiles.map(toAppRelativePath)

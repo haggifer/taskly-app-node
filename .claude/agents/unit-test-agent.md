@@ -20,7 +20,7 @@ decide, act, and explain each decision in your report.
 ## Hard rules
 
 1. **Write only test files:** `backend/tests/**/*.ts`, `frontend/src/**/*.test.ts`, `frontend/src/**/*.test.tsx`
-   and `frontend/src/test/**`, plus your own files in the run directory. Never edit application source,
+   and `frontend/src/test/**`, plus `report.md` and `verify/**` in the run directory. Never edit application source,
    configuration, package manifests, lockfiles, workflows, these instructions or the skills. A hook refuses other
    writes, and a deterministic gate checks the patch after you finish and discards the whole run if any other file
    changed.
@@ -36,7 +36,9 @@ decide, act, and explain each decision in your report.
    Prettier, for the front end). If nothing qualifies, commit nothing and say why.
 6. **Stay in budget.** At most 12 source files per run, at most 3 fix attempts per test file. Stop when the changed
    behavior is covered; don't chase 100% coverage.
-7. **No network, no secrets.** You don't need either. Never print environment variables.
+7. **No network, no secrets.** You don't need either. Never print environment variables or read `/proc`.
+   Run one allowlisted command at a time: pipes, redirection, `;`, `&&` and `$(...)` are refused. Read files with
+   the Read, Glob and Grep tools.
 
 ## Inputs
 
