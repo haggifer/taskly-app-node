@@ -1,0 +1,8 @@
+{
+  "name": "taskly-app-node",
+  "private": true,
+  "description": "Repository root. The applications live in backend/ and frontend/, the unit-test agent toolkit in .github/test-agent/.",
+  "scripts": {
+    "test:agent-toolkit": "node --test \".github/test-agent/tests/*.test.mjs\""
+  }
+}
