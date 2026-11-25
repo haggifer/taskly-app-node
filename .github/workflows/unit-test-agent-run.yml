@@ -70,43 +70,22 @@ jobs:
           (cd backend && npx --no-install prisma generate)
           npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
 
-      # A pull request must not be able to rewrite the instructions, skills, settings or guard of the agent that
-      # reviews it, so those come from the base branch. The overlay stays unstaged and never enters the agent's commit.
-      - name: Use the agent's files from the base branch
-        if: inputs.mode == 'pr'
+      # A pull request must not be able to rewrite the instructions, skills, settings, guard or toolkit of the agent
+      # that reviews it. They come from the base branch, into a root-owned, read-only copy made before any PR code runs.
+      - name: Extract the trusted agent files
+        id: trusted
         env:
-          BASE_SHA: ${{ inputs.base-sha }}
+          TRUSTED_REF: ${{ inputs.base-sha || inputs.checkout-ref }}
         run: |
-          if ! git diff --quiet "$BASE_SHA" HEAD -- .claude .github/test-agent; then
+          TRUSTED=/opt/test-agent-trusted
+          sudo mkdir -p "$TRUSTED"
+          git archive "$TRUSTED_REF" .claude .github/test-agent | sudo tar -x -C "$TRUSTED"
+          sudo chown -R root:root "$TRUSTED" && sudo chmod -R a-w,a+rX "$TRUSTED"
+          echo "TRUSTED=$TRUSTED" >> "$GITHUB_ENV"
+          echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if ! git diff --quiet "$TRUSTED_REF" HEAD -- .claude .github/test-agent; then
             echo "::notice::This pull request changes the agent's own files; the run uses the base branch's versions."
           fi
-          rm -rf .claude .github/test-agent
-          git archive "$BASE_SHA" .claude .github/test-agent | tar -x
-
-      - name: Prepare the agent's inputs
-        id: prepare
-        env:
-          MODE: ${{ inputs.mode }}
-          BASE_SHA: ${{ inputs.base-sha }}
-          APP: ${{ inputs.app }}
-          MAX_FILES: ${{ inputs.max-files }}
-        run: |
-          mkdir -p "$RUN_DIR"
-          CHANGES=()
-          if [ "$MODE" = "pr" ]; then
-            node .github/test-agent/collect-changes.mjs --base "$BASE_SHA" --head HEAD --out "$RUN_DIR/changes.json"
-            CHANGES=(--changes "$RUN_DIR/changes.json")
-          fi
-          for app in backend frontend; do
-            node .github/test-agent/run-tests.mjs --app "$app" "${CHANGES[@]}" --out "$RUN_DIR/baseline/$app" || true
-          done
-          if [ "$MODE" = "backfill" ]; then
-            node .github/test-agent/select-targets.mjs --baseline "$RUN_DIR/baseline" --app "$APP" \
-              --max "$MAX_FILES" --out "$RUN_DIR/targets.json"
-          fi
-          echo "start-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git config user.name "unit-test-agent"
-          git config user.email "unit-test-agent@users.noreply.github.com"
 
       - name: Install Claude Code
         run: npm install --global --no-audit --no-fund "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
@@ -130,6 +109,33 @@ jobs:
           done
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user --unshare-pid --unshare-net true
           echo "bubblewrap works; Docker is stopped"
+
+      - name: Prepare the agent's inputs
+        id: prepare
+        env:
+          MODE: ${{ inputs.mode }}
+          BASE_SHA: ${{ inputs.base-sha }}
+          APP: ${{ inputs.app }}
+          MAX_FILES: ${{ inputs.max-files }}
+          TEST_AGENT_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          TOOLKIT="$TRUSTED/.github/test-agent"
+          mkdir -p "$RUN_DIR"
+          CHANGES=()
+          if [ "$MODE" = "pr" ]; then
+            node "$TOOLKIT/collect-changes.mjs" --base "$BASE_SHA" --head HEAD --out "$RUN_DIR/changes.json"
+            CHANGES=(--changes "$RUN_DIR/changes.json")
+          fi
+          for app in backend frontend; do
+            bash "$TOOLKIT/sandboxed.sh" "$TEST_AGENT_REPO_ROOT" "$RUN_DIR" -- \
+              node "$TOOLKIT/run-tests.mjs" --app "$app" "${CHANGES[@]}" --out "$RUN_DIR/baseline/$app" || true
+          done
+          if [ "$MODE" = "backfill" ]; then
+            node "$TOOLKIT/select-targets.mjs" --baseline "$RUN_DIR/baseline" --app "$APP" \
+              --max "$MAX_FILES" --out "$RUN_DIR/targets.json"
+          fi
+          git config user.name "unit-test-agent"
+          git config user.email "unit-test-agent@users.noreply.github.com"
 
       - name: Write the task prompt
         env:
@@ -163,6 +169,18 @@ jobs:
           EOF
           fi
 
+      # The last step before the agent, after every step that ran pull request code unsandboxed: the agent's files in
+      # the checkout are replaced with the trusted copy, and project memory or MCP files the PR could add are removed.
+      # The overlay stays unstaged and never enters the agent's commit.
+      - name: Put the trusted agent files in place
+        run: |
+          rm -rf .claude .github/test-agent
+          cp -r "$TRUSTED/.claude" .claude
+          cp -r "$TRUSTED/.github/test-agent" .github/test-agent
+          chmod -R u+w .claude .github/test-agent
+          find . -name node_modules -prune -o -type f \( -name CLAUDE.md -o -name CLAUDE.local.md -o -name .mcp.json \) \
+            -print -exec rm -f {} +
+
       - name: Run the agent
         id: agent
         continue-on-error: true
@@ -172,8 +190,10 @@ jobs:
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
           DISABLE_AUTOUPDATER: "1"
           TEST_AGENT_RUN_DIR: ${{ runner.temp }}/test-agent
+          TEST_AGENT_REPO_ROOT: ${{ github.workspace }}
         # The sandbox allows Unix sockets (no seccomp layer on hosted runners), so every socket that exists before the
         # agent starts is hidden from it: systemd, D-Bus, snapd, Docker, and the runner's .NET diagnostic sockets.
+        # Hooks run outside the sandbox, so the guard runs from the root-owned trusted copy, not from the checkout.
         run: |
           {
             sudo find /run -type s 2>/dev/null | while read -r socket; do
@@ -185,15 +205,23 @@ jobs:
           SETTINGS="$RUNNER_TEMP/claude-settings.json"
           node -e '
             const fs = require("fs")
-            const settings = JSON.parse(fs.readFileSync(".github/test-agent/claude-settings.json", "utf8"))
-            const hidden = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/).filter(Boolean)
+            const [hiddenPath, outPath, trusted] = process.argv.slice(1)
+            const settings = JSON.parse(fs.readFileSync(`${trusted}/.github/test-agent/claude-settings.json`, "utf8"))
+            const hidden = fs.readFileSync(hiddenPath, "utf8").split(/\r?\n/).filter(Boolean)
             settings.sandbox.filesystem = { ...settings.sandbox.filesystem, denyRead: hidden }
-            fs.writeFileSync(process.argv[2], JSON.stringify(settings, null, 2))
-            console.log(`Hiding ${hidden.length} socket paths from the sandbox.`)' "$RUNNER_TEMP/hidden-sockets.txt" "$SETTINGS"
+            for (const entry of settings.hooks.PreToolUse) {
+              for (const hook of entry.hooks) {
+                hook.command = `node "${trusted}/.github/test-agent/hooks/allow-test-writes.mjs"`
+              }
+            }
+            fs.writeFileSync(outPath, JSON.stringify(settings, null, 2))
+            console.log(`Hiding ${hidden.length} socket paths from the sandbox.`)' \
+            "$RUNNER_TEMP/hidden-sockets.txt" "$SETTINGS" "$TRUSTED"
           ALLOWED_TOOLS=$(node -p "require(process.argv[1]).permissions.allow.join(',')" "$SETTINGS")
           claude -p "$(cat "$RUN_DIR/prompt.md")" \
             --agent unit-test-agent \
             --settings "$SETTINGS" \
+            --strict-mcp-config \
             --add-dir "$RUN_DIR" \
             --tools Read,Glob,Grep,Edit,Write,Bash,Skill \
             --allowedTools "$ALLOWED_TOOLS" \
@@ -206,7 +234,7 @@ jobs:
       - name: Package the agent's output
         if: always()
         env:
-          START_SHA: ${{ steps.prepare.outputs.start-sha }}
+          START_SHA: ${{ steps.trusted.outputs.start-sha }}
           AGENT_OUTCOME: ${{ steps.agent.outcome }}
         run: |
           PKG="$RUNNER_TEMP/test-agent-package"

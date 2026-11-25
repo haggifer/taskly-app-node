@@ -14,10 +14,29 @@ const RUN_DIR_FILES = ['report.md']
 const RUN_DIR_FOLDERS = ['verify']
 const SHELL_OPERATORS = /[;&|<>`$\r\n]/
 const OUTPUT_FLAG = /(^|\s)--output(=|\s|$)/
-const BULK_GIT_ADD =
-  /^\s*git\s+add\b.*(\s(-A|--all|-u|--update|\.|:\/|\*)(\s|$)|\s-[a-zA-Z]*[Au])/
-const BULK_GIT_COMMIT =
-  /^\s*git\s+commit\b.*\s(-[a-zA-Z]*a[a-zA-Z]*|--all)(\s|$)/
+const PATHSPEC_MAGIC = /[*?[\]:]/
+const STAGING_RULE =
+  'Stage test files by path (git add <test files>) and commit with git commit -m "<message>" only.'
+
+// Splits a command the way the shell would for the simple, operator-free commands allowed here.
+const splitArgs = (command) =>
+  [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+    ([, double, single, bare]) => double ?? single ?? bare,
+  )
+
+const isTestPathArg = (arg) =>
+  !arg.startsWith('-') && !PATHSPEC_MAGIC.test(arg) && isAllowedTestPath(arg)
+
+const isAllowedGitAdd = (args) => {
+  const paths = args[0] === '--' ? args.slice(1) : args
+
+  return paths.length > 0 && paths.every(isTestPathArg)
+}
+
+const isAllowedGitCommit = (args) =>
+  args.length >= 2 &&
+  args.length % 2 === 0 &&
+  args.every((arg, index) => (index % 2 === 0 ? arg === '-m' : arg.length > 0))
 
 const isInside = (parent, child) => {
   const path = relative(parent, child)
@@ -95,12 +114,15 @@ export const getCommandDecision = (command) => {
     }
   }
 
-  if (BULK_GIT_ADD.test(command) || BULK_GIT_COMMIT.test(command)) {
-    return {
-      isAllowed: false,
-      reason:
-        'Stage test files by path (git add <paths>), then git commit -m. Bulk staging is not allowed.',
-    }
+  const [program, subcommand, ...args] = splitArgs(command)
+  const isGitAdd = program === 'git' && subcommand === 'add'
+  const isGitCommit = program === 'git' && subcommand === 'commit'
+
+  if (
+    (isGitAdd && !isAllowedGitAdd(args)) ||
+    (isGitCommit && !isAllowedGitCommit(args))
+  ) {
+    return { isAllowed: false, reason: STAGING_RULE }
   }
 
   return { isAllowed: true, reason: null }
