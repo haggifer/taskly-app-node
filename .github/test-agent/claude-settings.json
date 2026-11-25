@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write",
+      "Skill",
+      "Bash(node .github/test-agent/collect-changes.mjs *)",
+      "Bash(node .github/test-agent/run-tests.mjs *)",
+      "Bash(node .github/test-agent/select-targets.mjs *)",
+      "Bash(node frontend/node_modules/prettier/bin/prettier.cjs *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(wc *)"
+    ],
+    "deny": [
+      "WebFetch",
+      "WebSearch",
+      "Bash(git push *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Read(./.env)",
+      "Read(./**/.env)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.github/test-agent/hooks/allow-test-writes.mjs\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
