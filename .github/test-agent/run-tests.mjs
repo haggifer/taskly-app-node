@@ -19,7 +19,12 @@ import {
   toAppRelativePath,
 } from './lib/paths.mjs'
 import { findFlakyTests, summarizeResults } from './lib/results.mjs'
-import { REPO_ROOT, runVitest } from './lib/tools.mjs'
+import {
+  REPO_ROOT,
+  runPrettierCheck,
+  runTypecheck,
+  runVitest,
+} from './lib/tools.mjs'
 
 const APPS = ['backend', 'frontend']
 const MAX_REPEAT = 5
@@ -30,6 +35,7 @@ const OPTIONS = {
   targets: { type: 'string' },
   changes: { type: 'string' },
   repeat: { type: 'string', default: '1' },
+  typecheck: { type: 'boolean', default: false },
   out: { type: 'string' },
 }
 
@@ -116,6 +122,17 @@ const dedupeFailures = (failures) => [
   ).values(),
 ]
 
+const formatCheck = (name, check) =>
+  check
+    ? [
+        check.exitCode === 0
+          ? `${name}: ok`
+          : `${name}: FAILED\n${check.output}`,
+      ]
+    : []
+
+const isCheckPassing = (check) => (check?.exitCode ?? 0) === 0
+
 const formatSummary = (result) => {
   const lines = [
     `${result.app}: ${result.passed} passed, ${result.failed} failed, ${result.skipped} skipped (${result.runs} run(s))`,
@@ -124,6 +141,8 @@ const formatSummary = (result) => {
         `FAIL ${failure.file ? `${failure.file} › ` : ''}${failure.name}\n${failure.message}`,
     ),
     ...result.flaky.map((key) => `FLAKY ${key}`),
+    ...formatCheck('typecheck', result.typecheck),
+    ...formatCheck('prettier', result.format),
   ]
 
   if (result.coverage) {
@@ -179,6 +198,11 @@ runCli(() => {
     }),
   )
   const runs = [firstRun, ...repeatRuns]
+  const typecheck = values.typecheck ? runTypecheck(app) : null
+  const format =
+    values.typecheck && app === 'frontend'
+      ? runPrettierCheck(appTestFiles)
+      : null
 
   const summaries = runs.map((run) => summarizeResults(REPO_ROOT, run.results))
   const failures = dedupeFailures([
@@ -199,11 +223,18 @@ runCli(() => {
     ),
     coverage: getCoverage(firstRun, targets),
     changedLineCoverage: getChangedLinesCoverage(firstRun, changedSources),
+    typecheck,
+    format,
     vitestOutput: failures.length ? firstRun.output : '',
   }
+  const isPassing =
+    result.failed === 0 &&
+    result.flaky.length === 0 &&
+    isCheckPassing(typecheck) &&
+    isCheckPassing(format)
 
   writeJson(join(out, 'result.json'), result)
   console.log(formatSummary(result))
 
-  return result.failed === 0 && result.flaky.length === 0 ? 0 : 1
+  return isPassing ? 0 : 1
 })
