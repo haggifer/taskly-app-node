@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        host: [apparmor-profile, sysctl]
+        host: [sysctl-both, weaker-nested]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -46,11 +46,13 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
           DISABLE_AUTOUPDATER: "1"
+          HOST: ${{ matrix.host }}
         run: |
           RUN_DIR="$RUNNER_TEMP/test-agent"; mkdir -p "$RUN_DIR/verify"
           node -e '
             const s = require("./.github/test-agent/claude-settings.json")
             s.permissions.allow.push("Bash(node probe/proc-environ.mjs)")
+            if (process.env.HOST === "weaker-nested") s.sandbox.enableWeakerNestedSandbox = true
             require("fs").writeFileSync(process.argv[1], JSON.stringify(s))' "$RUNNER_TEMP/probe-settings.json"
           ALLOWED=$(node -p "require(process.argv[1]).permissions.allow.join(',')" "$RUNNER_TEMP/probe-settings.json")
           TEST_AGENT_RUN_DIR="$RUN_DIR" claude -p "This is an infrastructure probe. Run exactly these three shell commands, one at a time, and print each command's complete output verbatim, then stop. 1) git status --short  2) node .github/test-agent/run-tests.mjs --app backend --tests tests/router.test.ts --out $RUN_DIR/verify/probe  3) node probe/proc-environ.mjs" \
