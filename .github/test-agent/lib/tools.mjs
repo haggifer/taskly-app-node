@@ -1,0 +1,76 @@
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+
+const MAX_BUFFER = 64 * 1024 * 1024
+const OUTPUT_TAIL = 4000
+
+const BINARIES = {
+  prettier: 'node_modules/prettier/bin/prettier.cjs',
+  tsc: 'node_modules/typescript/bin/tsc',
+  vitest: 'node_modules/vitest/vitest.mjs',
+}
+
+export const REPO_ROOT = resolve(import.meta.dirname, '../../..')
+
+const getAppDir = (app) => join(REPO_ROOT, app)
+
+const runNodeBinary = (app, binary, args) => {
+  const result = spawnSync(
+    process.execPath,
+    [join(getAppDir(app), BINARIES[binary]), ...args],
+    { cwd: getAppDir(app), encoding: 'utf8', maxBuffer: MAX_BUFFER },
+  )
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+
+  return { exitCode: result.status ?? 1, output: output.slice(-OUTPUT_TAIL) }
+}
+
+const readJson = (path) =>
+  existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null
+
+const getCoverageArgs = (coverageDir, coverageInclude) => [
+  '--coverage.enabled=true',
+  '--coverage.reporter=json',
+  '--coverage.reporter=json-summary',
+  `--coverage.reportsDirectory=${coverageDir}`,
+  ...coverageInclude.map((path) => `--coverage.include=${path}`),
+]
+
+export const runVitest = ({
+  app,
+  testFiles = [],
+  outDir,
+  isCoverageEnabled = false,
+  coverageInclude = [],
+  isShuffled = false,
+}) => {
+  const resultsPath = join(outDir, 'results.json')
+  const coverageDir = join(outDir, 'coverage')
+
+  mkdirSync(outDir, { recursive: true })
+
+  const { exitCode, output } = runNodeBinary(app, 'vitest', [
+    'run',
+    ...testFiles,
+    '--reporter=json',
+    `--outputFile=${resultsPath}`,
+    ...(isShuffled ? ['--sequence.shuffle'] : []),
+    ...(isCoverageEnabled ? getCoverageArgs(coverageDir, coverageInclude) : []),
+  ])
+
+  return {
+    exitCode,
+    output,
+    results: readJson(resultsPath),
+    coverageMap: readJson(join(coverageDir, 'coverage-final.json')),
+    coverageSummary: readJson(join(coverageDir, 'coverage-summary.json')),
+  }
+}
+
+export const runTypecheck = (app) => runNodeBinary(app, 'tsc', ['--noEmit'])
+
+export const runPrettierCheck = (files) =>
+  files.length === 0
+    ? { exitCode: 0, output: '' }
+    : runNodeBinary('frontend', 'prettier', ['--check', ...files])
