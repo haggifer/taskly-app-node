@@ -87,7 +87,8 @@ runs:
         if [ "$(sha256sum "$PATCH" | cut -d ' ' -f 1)" != "$PATCH_SHA256" ]; then
           echo "::error::The patch changed while the gate ran."; exit 1
         fi
-        git -c user.name="unit-test-agent gate" -c user.email="gate@localhost" am --3way "$PATCH"
+        git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c user.name="unit-test-agent gate" \
+          -c user.email="gate@localhost" am --3way "$PATCH"
 
     - name: Verify the patch
       shell: bash

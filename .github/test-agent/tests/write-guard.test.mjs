@@ -185,6 +185,20 @@ describe('getCommandDecision', () => {
     }
   })
 
+  it('refuses quoting tricks the shell would resolve differently', () => {
+    for (const command of [
+      'git add backend/tests/".."/x.test.ts',
+      "git add 'backend/tests/a.test.ts'",
+      'git add backend/tests/a\\.test.ts',
+      'git add "backend/tests/a.test.ts"x',
+      'git commit -m "x"" -a"',
+      'git commit -m "x\\" -a"',
+      "git commit -m 'x'",
+    ]) {
+      assert.equal(getCommandDecision(command).isAllowed, false, command)
+    }
+  })
+
   it('accepts several messages and the -- separator', () => {
     assert.equal(
       getCommandDecision('git commit -m "title" -m "body"').isAllowed,
