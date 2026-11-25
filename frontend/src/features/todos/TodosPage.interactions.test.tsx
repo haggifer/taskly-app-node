@@ -22,6 +22,9 @@ vi.mock('./hooks/useTodosQuery', () => ({ useTodosQuery: vi.fn() }))
 vi.mock('./hooks/useUpdateTodoMutation', () => ({
   useUpdateTodoMutation: vi.fn(),
 }))
+vi.mock('./hooks/useClearCompletedMutation', () => ({
+  useClearCompletedMutation: () => ({ error: null, reset: vi.fn() }),
+}))
 vi.mock('./components/TodosHeader', () => ({ TodosHeader: vi.fn(() => null) }))
 vi.mock('./components/TodoFilters', () => ({ TodoFilters: vi.fn(() => null) }))
 vi.mock('./components/TodoList', () => ({ TodoList: vi.fn(() => null) }))
