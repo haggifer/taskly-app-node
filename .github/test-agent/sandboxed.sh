@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Runs pull request code (tests, test runners) with no network, a read-only filesystem except the directories given
 # before "--", a private /tmp, and none of the runner's command files or tokens, so it can't reach the job's later
-# steps through GITHUB_ENV, GITHUB_OUTPUT and the like.
+# steps through GITHUB_ENV, GITHUB_OUTPUT and the like. A .git folder inside a writable directory stays read-only, so
+# the code can't plant hooks or config that a later, unsandboxed git command would run.
 # Usage: sandboxed.sh <writable dir>... -- <command> [args...]
 set -euo pipefail
 
 binds=()
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
   binds+=(--bind "$1" "$1")
+  if [ -e "$1/.git" ]; then binds+=(--ro-bind "$1/.git" "$1/.git"); fi
   shift
 done
 if [ "$#" -eq 0 ]; then

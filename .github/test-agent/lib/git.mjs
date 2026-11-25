@@ -1,6 +1,13 @@
 import { execFileSync } from 'node:child_process'
 
 const MAX_BUFFER = 64 * 1024 * 1024
+// Pull request code may have run in this checkout, so repository config must not be able to run anything.
+const SAFE_GIT_OPTIONS = [
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+]
 
 const STATUS_NAMES = {
   A: 'added',
@@ -12,7 +19,11 @@ const STATUS_NAMES = {
 }
 
 export const runGit = (args, cwd = process.cwd()) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_BUFFER })
+  execFileSync('git', [...SAFE_GIT_OPTIONS, ...args], {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: MAX_BUFFER,
+  })
 
 export const parseNameStatus = (output) =>
   output

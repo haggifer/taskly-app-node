@@ -14,29 +14,20 @@ const RUN_DIR_FILES = ['report.md']
 const RUN_DIR_FOLDERS = ['verify']
 const SHELL_OPERATORS = /[;&|<>`$\r\n]/
 const OUTPUT_FLAG = /(^|\s)--output(=|\s|$)/
-const PATHSPEC_MAGIC = /[*?[\]:]/
 const STAGING_RULE =
   'Stage test files by path (git add <test files>) and commit with git commit -m "<message>" only.'
+// A strict grammar instead of shell parsing: plain paths (no quotes, escapes or globs) and double-quoted messages
+// without quotes or backslashes inside, so what is checked here is exactly what the shell runs.
+const GIT_ADD = /^git add(?: --)?((?: [A-Za-z0-9_./-]+)+)$/
+const GIT_COMMIT = /^git commit(?: -m "[^"\\]+")+$/
+const STARTS_GIT_ADD = /^git\s+add(\s|$)/
+const STARTS_GIT_COMMIT = /^git\s+commit(\s|$)/
 
-// Splits a command the way the shell would for the simple, operator-free commands allowed here.
-const splitArgs = (command) =>
-  [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
-    ([, double, single, bare]) => double ?? single ?? bare,
-  )
+const isAllowedGitAdd = (command) => {
+  const match = command.match(GIT_ADD)
 
-const isTestPathArg = (arg) =>
-  !arg.startsWith('-') && !PATHSPEC_MAGIC.test(arg) && isAllowedTestPath(arg)
-
-const isAllowedGitAdd = (args) => {
-  const paths = args[0] === '--' ? args.slice(1) : args
-
-  return paths.length > 0 && paths.every(isTestPathArg)
+  return Boolean(match) && match[1].trim().split(' ').every(isAllowedTestPath)
 }
-
-const isAllowedGitCommit = (args) =>
-  args.length >= 2 &&
-  args.length % 2 === 0 &&
-  args.every((arg, index) => (index % 2 === 0 ? arg === '-m' : arg.length > 0))
 
 const isInside = (parent, child) => {
   const path = relative(parent, child)
@@ -114,14 +105,12 @@ export const getCommandDecision = (command) => {
     }
   }
 
-  const [program, subcommand, ...args] = splitArgs(command)
-  const isGitAdd = program === 'git' && subcommand === 'add'
-  const isGitCommit = program === 'git' && subcommand === 'commit'
+  const trimmed = command.trim()
+  const isRefusedAdd = STARTS_GIT_ADD.test(trimmed) && !isAllowedGitAdd(trimmed)
+  const isRefusedCommit =
+    STARTS_GIT_COMMIT.test(trimmed) && !GIT_COMMIT.test(trimmed)
 
-  if (
-    (isGitAdd && !isAllowedGitAdd(args)) ||
-    (isGitCommit && !isAllowedGitCommit(args))
-  ) {
+  if (isRefusedAdd || isRefusedCommit) {
     return { isAllowed: false, reason: STAGING_RULE }
   }
 

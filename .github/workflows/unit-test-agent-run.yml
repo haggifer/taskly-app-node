@@ -239,9 +239,10 @@ jobs:
         run: |
           PKG="$RUNNER_TEMP/test-agent-package"
           rm -rf "$PKG" && mkdir -p "$PKG"
-          if [ -n "$(git rev-list "$START_SHA..HEAD")" ]; then
-            git format-patch --stdout "$START_SHA..HEAD" > "$PKG/agent.patch"
-            git diff --stat "$START_SHA" HEAD >> "$GITHUB_STEP_SUMMARY"
+          GIT=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null)
+          if [ -n "$("${GIT[@]}" rev-list "$START_SHA..HEAD")" ]; then
+            "${GIT[@]}" format-patch --stdout "$START_SHA..HEAD" > "$PKG/agent.patch"
+            "${GIT[@]}" diff --stat "$START_SHA" HEAD >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ -f "$RUN_DIR/report.md" ]; then
             head -c 60000 "$RUN_DIR/report.md" > "$PKG/report.md"
