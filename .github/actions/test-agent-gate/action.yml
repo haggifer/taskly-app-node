@@ -1,0 +1,99 @@
+name: Unit-test agent gate
+description: >-
+  Applies the agent's patch on a fresh checkout and verifies it deterministically: only test files changed, every
+  suite, typecheck and Prettier pass, and changed-line coverage before and after. Fails the job if anything is off.
+
+inputs:
+  base-sha:
+    description: Base commit of the pull request, for the change manifest. Empty in backfill mode.
+    required: false
+    default: ""
+  patch-dir:
+    description: Directory holding the agent's aw-*.patch files (the agent artifact).
+    required: true
+  workspace:
+    description: Path of a fresh checkout of the commit the agent started from.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Copy the gate toolkit before any patch is applied
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: cp -r .github/test-agent "$RUNNER_TEMP/test-agent-gate"
+
+    - name: Install dependencies without lifecycle scripts
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: |
+        npm ci --prefix backend --ignore-scripts --no-audit --no-fund
+        (cd backend && npx --no-install prisma generate)
+        npm ci --prefix frontend --ignore-scripts --no-audit --no-fund
+
+    - name: Measure the baseline
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        TEST_AGENT_REPO_ROOT: ${{ github.workspace }}/${{ inputs.workspace }}
+      run: |
+        GATE="$RUNNER_TEMP/test-agent-gate"
+        OUT="$RUNNER_TEMP/test-agent-run"
+        mkdir -p "$OUT"
+        if [ -n "$BASE_SHA" ]; then
+          node "$GATE/collect-changes.mjs" --base "$BASE_SHA" --head HEAD --out "$OUT/changes.json"
+          CHANGES=(--changes "$OUT/changes.json")
+        else
+          CHANGES=()
+        fi
+        for app in backend frontend; do
+          node "$GATE/run-tests.mjs" --app "$app" "${CHANGES[@]}" --out "$OUT/baseline/$app" || true
+        done
+        git rev-parse HEAD > "$OUT/start-sha"
+
+    - name: Apply the agent's patch
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PATCH_DIR: ${{ inputs.patch-dir }}
+      run: |
+        shopt -s nullglob
+        patches=("$PATCH_DIR"/aw-*.patch)
+        if [ ${#patches[@]} -eq 0 ]; then
+          echo "The agent produced no patch."
+          exit 0
+        fi
+        git -c user.name="unit-test-agent gate" -c user.email="gate@localhost" am --3way "${patches[@]}"
+
+    - name: Verify the patch
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        TEST_AGENT_REPO_ROOT: ${{ github.workspace }}/${{ inputs.workspace }}
+      run: |
+        OUT="$RUNNER_TEMP/test-agent-run"
+        CHANGES=()
+        if [ -f "$OUT/changes.json" ]; then CHANGES=(--changes "$OUT/changes.json"); fi
+        node "$RUNNER_TEMP/test-agent-gate/verify-patch.mjs" \
+          --since "$(cat "$OUT/start-sha")" "${CHANGES[@]}" \
+          --baseline "$OUT/baseline" --out "$OUT/verification"
+
+    - name: Add the gate summary to the job summary
+      if: always()
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: |
+        SUMMARY="$RUNNER_TEMP/test-agent-run/verification/summary.md"
+        if [ -f "$SUMMARY" ]; then cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"; fi
+
+    - name: Upload the gate results
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: test-agent-verification
+        path: |
+          ${{ runner.temp }}/test-agent-run/verification/verification.json
+          ${{ runner.temp }}/test-agent-run/verification/summary.md
+        if-no-files-found: ignore
+        retention-days: 14
